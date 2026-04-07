@@ -11,89 +11,88 @@ export class Nivel2Service {
     private analisis: AnalisisService,
   ) {}
 
-  async process(analisisId: string) {
-    await this.analisis.setNivelProcesando(analisisId, 2);
+  async process(analysisId: string) {
+    await this.analisis.setNivelProcesando(analysisId, 2);
 
-    const analisisDoc = await this.prisma.analisisDocumento.findUnique({
-      where: { id: analisisId },
-      include: { metaforasPrimarias: true },
+    const analysisDoc = await this.prisma.documentAnalysis.findUnique({
+      where: { id: analysisId },
+      include: { primaryMetaphors: true },
     });
 
-    const metaforas = analisisDoc?.metaforasPrimarias
-      .filter((m) => m.itemStatus === 'APROBADO')
+    const metaphors = analysisDoc?.primaryMetaphors
+      .filter((m) => m.itemStatus === 'APPROVED')
       .map((m) => ({
         id: m.id,
-        metaforaConceptual: m.metaforaConceptual,
-        dominioFuente: m.dominioFuente,
-        dominioMeta: m.dominioMeta,
+        conceptualMetaphor: m.conceptualMetaphor,
+        sourceDomain: m.sourceDomain,
+        targetDomain: m.targetDomain,
       }));
 
     const systemPrompt = `Eres un experto en lingüística cognitiva. Tu tarea es identificar metáforas convencionales
 a partir de un conjunto de metáforas conceptuales primarias, aplicando dos enfoques:
 
-1. FRECUENCIA: agrupa metáforas que son instancias exactas o casi exactas de la misma metáfora conceptual.
-   Si supera el umbral de frecuencia (≥3), es convencional. La metáfora convencional es la forma más común.
-2. CLUSTER_TEMATICO: agrupa metáforas por familia conceptual (mismo dominio fuente), elige la metáfora
+1. FREQUENCY: agrupa metáforas que son instancias exactas o casi exactas de la misma metáfora conceptual.
+   Si supera el umbral de frecuencia (≥3), es convencional.
+2. THEMATIC_CLUSTER: agrupa metáforas por familia conceptual (mismo dominio fuente), elige la metáfora
    estructurante principal. Si el cluster tiene ≥3 metáforas, es convencional.
 
 Para cada metáfora convencional retorna:
-- metaforaConceptual: forma canónica A ES B
-- dominioFuente / dominioMeta
-- enfoque: FRECUENCIA | CLUSTER_TEMATICO
-- frecuenciaAbsoluta: conteo de metáforas primarias que la instancian
-- robustez: ALTA (≥5) | MODERADA (3-4) | DEBIL (<3)
-- contextoUso: descripción breve del contexto de uso
-- metaforasPrimariasIds: array de IDs de metáforas primarias que la componen
+- conceptualMetaphor: forma canónica A ES B
+- sourceDomain / targetDomain
+- approach: FREQUENCY | THEMATIC_CLUSTER
+- absoluteFrequency: conteo de metáforas primarias que la instancian
+- robustness: HIGH (≥5) | MODERATE (3-4) | WEAK (<3)
+- usageContext: descripción breve del contexto de uso
+- primaryMetaphorIds: array de IDs de metáforas primarias que la componen
 
 Responde ÚNICAMENTE con JSON:
 \`\`\`json
-{ "metaforasConvencionales": [ { ...campos, "metaforasPrimariasIds": ["id1","id2"] }, ... ] }
+{ "conventionalMetaphors": [ { ...campos, "primaryMetaphorIds": ["id1","id2"] }, ... ] }
 \`\`\``;
 
-    const result = await this.ai.completeJson<{ metaforasConvencionales: any[] }>(
-      analisisDoc!.aiProvider,
-      [{ role: 'user', content: JSON.stringify({ metaforas }) }],
+    const result = await this.ai.completeJson<{ conventionalMetaphors: any[] }>(
+      analysisDoc!.aiProvider,
+      [{ role: 'user', content: JSON.stringify({ metaphors }) }],
       systemPrompt,
     );
 
-    await this.prisma.metaforaConvencional.deleteMany({ where: { analisisId } });
+    await this.prisma.conventionalMetaphor.deleteMany({ where: { analysisId } });
 
-    for (const mc of result.metaforasConvencionales) {
-      const created = await this.prisma.metaforaConvencional.create({
+    for (const mc of result.conventionalMetaphors) {
+      const created = await this.prisma.conventionalMetaphor.create({
         data: {
-          analisisId,
-          metaforaConceptual: mc.metaforaConceptual,
-          dominioFuente: mc.dominioFuente,
-          dominioMeta: mc.dominioMeta,
-          enfoque: mc.enfoque,
-          frecuenciaAbsoluta: mc.frecuenciaAbsoluta ?? 0,
-          robustez: mc.robustez,
-          contextoUso: mc.contextoUso,
+          analysisId,
+          conceptualMetaphor: mc.conceptualMetaphor,
+          sourceDomain: mc.sourceDomain,
+          targetDomain: mc.targetDomain,
+          approach: mc.approach,
+          absoluteFrequency: mc.absoluteFrequency ?? 0,
+          robustness: mc.robustness,
+          usageContext: mc.usageContext,
           aiGenerated: true,
         },
       });
 
-      // Link M:N with primary metaphors
-      if (mc.metaforasPrimariasIds?.length) {
-        await this.prisma.metaforaPrimariaConvencional.createMany({
-          data: mc.metaforasPrimariasIds.map((mpId: string) => ({
-            metaforaConvencionalId: created.id,
-            metaforaPrimariaId: mpId,
+      if (mc.primaryMetaphorIds?.length) {
+        await this.prisma.primaryMetaphorConventional.createMany({
+          data: mc.primaryMetaphorIds.map((mpId: string) => ({
+            conventionalMetaphorId: created.id,
+            primaryMetaphorId: mpId,
           })),
           skipDuplicates: true,
         });
       }
     }
 
-    await this.analisis.setNivelPendienteRevision(analisisId, 2);
-    return this.getResults(analisisId);
+    await this.analisis.setNivelPendienteRevision(analysisId, 2);
+    return this.getResults(analysisId);
   }
 
-  async getResults(analisisId: string) {
-    return this.prisma.metaforaConvencional.findMany({
-      where: { analisisId },
-      include: { metaforasPrimarias: { include: { metaforaPrimaria: true } } },
-      orderBy: { frecuenciaAbsoluta: 'desc' },
+  async getResults(analysisId: string) {
+    return this.prisma.conventionalMetaphor.findMany({
+      where: { analysisId },
+      include: { primaryMetaphors: { include: { primaryMetaphor: true } } },
+      orderBy: { absoluteFrequency: 'desc' },
     });
   }
 }

@@ -11,18 +11,28 @@ export class Nivel5Service {
     private analisis: AnalisisService,
   ) {}
 
-  async process(analisisId: string) {
-    await this.analisis.setNivelProcesando(analisisId, 5);
+  async process(analysisId: string) {
+    await this.analisis.setNivelProcesando(analysisId, 5);
 
-    const analisisDoc = await this.prisma.analisisDocumento.findUnique({
-      where: { id: analisisId },
+    const analysisDoc = await this.prisma.documentAnalysis.findUnique({
+      where: { id: analysisId },
       include: {
-        regimenes: {
-          where: { itemStatus: 'APROBADO' },
-          include: { ejeValorativo: true, escenarios: { include: { escenario: { include: { secuenciaNarrativa: true, sesgoEvaluativo: true } } } }, metaforasDerivadas: true },
-          orderBy: { frecuenciaAgregada: 'desc' },
+        regimes: {
+          where: { itemStatus: 'APPROVED' },
+          include: {
+            valueAxis: true,
+            scenarios: {
+              include: {
+                scenario: {
+                  include: { narrativeSequence: true, evaluativeBias: true },
+                },
+              },
+            },
+            derivedMetaphors: true,
+          },
+          orderBy: { aggregateFrequency: 'desc' },
         },
-        documento: true,
+        document: true,
       },
     });
 
@@ -35,44 +45,52 @@ y significa la relación imaginaria entre el individuo y sus condiciones materia
 en un contexto histórico-espacial dado" (Valdivia).
 
 Retorna:
-- regimenDominanteId: ID del régimen dominante
-- nombre: nombre de la narrativa cultural (breve, evocador)
-- descripcion: descripción de 3-5 oraciones de la narrativa cultural
-- distribucionTextual: array de citas o referencias textuales que evidencian la narrativa
+- dominantRegimeId: ID del régimen dominante
+- name: nombre de la narrativa cultural (breve, evocador)
+- description: descripción de 3-5 oraciones de la narrativa cultural
+- textualDistribution: array de citas o referencias textuales que evidencian la narrativa
 
 Responde ÚNICAMENTE con JSON:
 \`\`\`json
-{ "narrativa": { "regimenDominanteId": "...", "nombre": "...", "descripcion": "...", "distribucionTextual": [] } }
+{ "narrative": { "dominantRegimeId": "...", "name": "...", "description": "...", "textualDistribution": [] } }
 \`\`\``;
 
-    const result = await this.ai.completeJson<{ narrativa: any }>(
-      analisisDoc!.aiProvider,
-      [{ role: 'user', content: JSON.stringify({ regimenes: analisisDoc?.regimenes, documento: analisisDoc?.documento.titulo }) }],
+    const result = await this.ai.completeJson<{ narrative: any }>(
+      analysisDoc!.aiProvider,
+      [
+        {
+          role: 'user',
+          content: JSON.stringify({
+            regimes: analysisDoc?.regimes,
+            document: analysisDoc?.document.title,
+          }),
+        },
+      ],
       systemPrompt,
     );
 
-    await this.prisma.narrativaCultural.deleteMany({ where: { analisisId } });
+    await this.prisma.culturalNarrative.deleteMany({ where: { analysisId } });
 
-    const narrativa = result.narrativa;
-    await this.prisma.narrativaCultural.create({
+    const narrative = result.narrative;
+    await this.prisma.culturalNarrative.create({
       data: {
-        analisisId,
-        regimenId: narrativa.regimenDominanteId,
-        nombre: narrativa.nombre,
-        descripcion: narrativa.descripcion,
-        distribucionTextual: narrativa.distribucionTextual ?? [],
+        analysisId,
+        regimeId: narrative.dominantRegimeId,
+        name: narrative.name,
+        description: narrative.description,
+        textualDistribution: narrative.textualDistribution ?? [],
         aiGenerated: true,
       },
     });
 
-    await this.analisis.setNivelPendienteRevision(analisisId, 5);
-    return this.prisma.narrativaCultural.findUnique({ where: { analisisId } });
+    await this.analisis.setNivelPendienteRevision(analysisId, 5);
+    return this.prisma.culturalNarrative.findUnique({ where: { analysisId } });
   }
 
-  async getResults(analisisId: string) {
-    return this.prisma.narrativaCultural.findUnique({
-      where: { analisisId },
-      include: { regimen: { include: { ejeValorativo: true } } },
+  async getResults(analysisId: string) {
+    return this.prisma.culturalNarrative.findUnique({
+      where: { analysisId },
+      include: { regime: { include: { valueAxis: true } } },
     });
   }
 }

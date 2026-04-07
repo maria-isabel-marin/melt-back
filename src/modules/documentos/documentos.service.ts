@@ -8,22 +8,21 @@ export class DocumentosService {
   constructor(private prisma: PrismaService) {}
 
   async findAllByCorpus(corpusId: string, userId: string) {
-    // Verify user has access to corpus
     await this.assertCorpusAccess(corpusId, userId);
 
-    return this.prisma.documento.findMany({
+    return this.prisma.document.findMany({
       where: { corpusId },
       include: {
-        analisis: {
+        analysis: {
           select: {
             id: true,
             aiProvider: true,
-            nivel0Status: true,
-            nivel1Status: true,
-            nivel2Status: true,
-            nivel3Status: true,
-            nivel4Status: true,
-            nivel5Status: true,
+            level0Status: true,
+            level1Status: true,
+            level2Status: true,
+            level3Status: true,
+            level4Status: true,
+            level5Status: true,
             updatedAt: true,
           },
         },
@@ -33,30 +32,30 @@ export class DocumentosService {
   }
 
   async findOne(id: string, userId: string) {
-    const doc = await this.prisma.documento.findUnique({
+    const doc = await this.prisma.document.findUnique({
       where: { id },
       include: {
-        corpus: { include: { usuarios: { where: { userId } } } },
-        analisis: true,
+        corpus: { include: { users: { where: { userId } } } },
+        analysis: true,
       },
     });
 
-    if (!doc || doc.corpus.usuarios.length === 0) throw new NotFoundException('Documento no encontrado');
+    if (!doc || doc.corpus.users.length === 0) throw new NotFoundException('Document not found');
     return doc;
   }
 
   async create(dto: CreateDocumentoDto, userId: string) {
     await this.assertCorpusAccess(dto.corpusId, userId);
 
-    return this.prisma.documento.create({
+    return this.prisma.document.create({
       data: {
         corpusId: dto.corpusId,
-        titulo: dto.titulo,
-        descripcion: dto.descripcion,
-        autor: dto.autor,
-        tipoDocumento: dto.tipoDocumento,
-        idioma: dto.idioma,
-        nroPaginas: dto.nroPaginas,
+        title: dto.title,
+        description: dto.description,
+        author: dto.author,
+        documentType: dto.documentType,
+        language: dto.language,
+        pageCount: dto.pageCount,
         fileUrl: dto.fileUrl,
       },
     });
@@ -64,24 +63,24 @@ export class DocumentosService {
 
   async remove(id: string, userId: string) {
     const doc = await this.findOne(id, userId);
-    return this.prisma.documento.delete({ where: { id: doc.id } });
+    return this.prisma.document.delete({ where: { id: doc.id } });
   }
 
-  async initializeAnalisis(documentoId: string, userId: string, aiProvider: AiProvider) {
-    const doc = await this.findOne(documentoId, userId);
+  async initializeAnalisis(documentId: string, userId: string, aiProvider: AiProvider) {
+    const doc = await this.findOne(documentId, userId);
 
-    if (doc.analisis) {
-      return this.prisma.analisisDocumento.update({
-        where: { documentoId },
-        data: { aiProvider, nivel0Status: 'APROBADO' },
+    if (doc.analysis) {
+      return this.prisma.documentAnalysis.update({
+        where: { documentId },
+        data: { aiProvider, level0Status: 'APPROVED' },
       });
     }
 
-    return this.prisma.analisisDocumento.create({
+    return this.prisma.documentAnalysis.create({
       data: {
-        documentoId,
+        documentId,
         aiProvider,
-        nivel0Status: 'APROBADO',
+        level0Status: 'APPROVED',
       },
     });
   }
@@ -90,6 +89,6 @@ export class DocumentosService {
     const link = await this.prisma.userCorpus.findUnique({
       where: { userId_corpusId: { userId, corpusId } },
     });
-    if (!link) throw new NotFoundException('Corpus no encontrado o sin acceso');
+    if (!link) throw new NotFoundException('Corpus not found or no access');
   }
 }

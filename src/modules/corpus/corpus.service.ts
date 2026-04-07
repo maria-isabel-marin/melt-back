@@ -8,9 +8,9 @@ export class CorpusService {
 
   async findAllByUser(userId: string) {
     return this.prisma.corpus.findMany({
-      where: { usuarios: { some: { userId } } },
+      where: { users: { some: { userId } } },
       include: {
-        _count: { select: { documentos: true } },
+        _count: { select: { documents: true } },
       },
       orderBy: { updatedAt: 'desc' },
     });
@@ -18,24 +18,34 @@ export class CorpusService {
 
   async findOne(id: string, userId: string) {
     const corpus = await this.prisma.corpus.findFirst({
-      where: { id, usuarios: { some: { userId } } },
+      where: { id, users: { some: { userId } } },
       include: {
-        documentos: {
+        documents: {
           select: {
             id: true,
-            titulo: true,
-            tipoDocumento: true,
-            idioma: true,
-            nroPaginas: true,
-            nroTokens: true,
+            title: true,
+            documentType: true,
+            language: true,
+            pageCount: true,
+            tokenCount: true,
             createdAt: true,
-            analisis: { select: { nivel0Status: true, nivel1Status: true, nivel2Status: true, nivel3Status: true, nivel4Status: true, nivel5Status: true } },
+            analysis: {
+              select: {
+                id: true,
+                level0Status: true,
+                level1Status: true,
+                level2Status: true,
+                level3Status: true,
+                level4Status: true,
+                level5Status: true,
+              },
+            },
           },
         },
       },
     });
 
-    if (!corpus) throw new NotFoundException('Corpus no encontrado');
+    if (!corpus) throw new NotFoundException('Corpus not found');
     return corpus;
   }
 
@@ -43,7 +53,7 @@ export class CorpusService {
     return this.prisma.corpus.create({
       data: {
         ...dto,
-        usuarios: { create: { userId, role: 'OWNER' } },
+        users: { create: { userId, role: 'OWNER' } },
       },
     });
   }
@@ -62,7 +72,7 @@ export class CorpusService {
     const link = await this.prisma.userCorpus.findUnique({
       where: { userId_corpusId: { userId, corpusId } },
     });
-    if (!link) throw new NotFoundException('Corpus no encontrado');
-    if (link.role !== 'OWNER') throw new ForbiddenException('Solo el propietario puede modificar este corpus');
+    if (!link) throw new NotFoundException('Corpus not found');
+    if (link.role !== 'OWNER') throw new ForbiddenException('Only the owner can modify this corpus');
   }
 }

@@ -11,15 +11,15 @@ export class Nivel4Service {
     private analisis: AnalisisService,
   ) {}
 
-  async process(analisisId: string) {
-    await this.analisis.setNivelProcesando(analisisId, 4);
+  async process(analysisId: string) {
+    await this.analisis.setNivelProcesando(analysisId, 4);
 
-    const analisisDoc = await this.prisma.analisisDocumento.findUnique({
-      where: { id: analisisId },
+    const analysisDoc = await this.prisma.documentAnalysis.findUnique({
+      where: { id: analysisId },
       include: {
-        escenarios: {
-          where: { itemStatus: 'APROBADO' },
-          include: { sesgoEvaluativo: true, gruposSociales: true },
+        scenarios: {
+          where: { itemStatus: 'APPROVED' },
+          include: { evaluativeBias: true, socialGroups: true },
         },
       },
     });
@@ -29,66 +29,75 @@ Agrupa los escenarios aprobados en regímenes coherentes basándote en los sesgo
 (qué es positivo/negativo en cada escenario). Un régimen es un sistema ideológico coherente.
 
 Para cada régimen retorna:
-- nombreRegimen: nombre descriptivo del régimen
-- frecuenciaAgregada: suma de frecuencias de las metáforas convencionales que lo componen
-- escenarioIds: array de IDs de escenarios que agrupa
-- metaforas: array de metáforas conceptuales principales del régimen
-- metaforasDerivadas: array de metáforas derivadas por transitividad (ej. PROGRESS IS UP)
-- ejeValorativo: { nombreEje, poloPositivo[], poloNegativo[], evidencia }
+- regimeName: nombre descriptivo del régimen
+- aggregateFrequency: suma de frecuencias de las metáforas convencionales que lo componen
+- scenarioIds: array de IDs de escenarios que agrupa
+- metaphors: array de metáforas conceptuales principales del régimen
+- derivedMetaphors: array de metáforas derivadas por transitividad (ej. PROGRESS IS UP)
+- valueAxis: { axisName, positivePolarity[], negativePolarity[], evidence }
 
 Responde ÚNICAMENTE con JSON:
 \`\`\`json
-{ "regimenes": [ { ...campos } ] }
+{ "regimes": [ { ...campos } ] }
 \`\`\``;
 
-    const result = await this.ai.completeJson<{ regimenes: any[] }>(
-      analisisDoc!.aiProvider,
-      [{ role: 'user', content: JSON.stringify({ escenarios: analisisDoc?.escenarios }) }],
+    const result = await this.ai.completeJson<{ regimes: any[] }>(
+      analysisDoc!.aiProvider,
+      [{ role: 'user', content: JSON.stringify({ scenarios: analysisDoc?.scenarios }) }],
       systemPrompt,
     );
 
-    await this.prisma.regimenDeMetaforas.deleteMany({ where: { analisisId } });
+    await this.prisma.metaphorRegime.deleteMany({ where: { analysisId } });
 
-    for (const r of result.regimenes) {
-      const regimen = await this.prisma.regimenDeMetaforas.create({
+    for (const r of result.regimes) {
+      const regime = await this.prisma.metaphorRegime.create({
         data: {
-          analisisId,
-          nombreRegimen: r.nombreRegimen,
-          frecuenciaAgregada: r.frecuenciaAgregada ?? 0,
-          metaforas: r.metaforas ?? [],
+          analysisId,
+          regimeName: r.regimeName,
+          aggregateFrequency: r.aggregateFrequency ?? 0,
+          metaphors: r.metaphors ?? [],
           aiGenerated: true,
-          metaforasDerivadas: {
-            create: (r.metaforasDerivadas ?? []).map((md: string) => ({ metaforaDerivada: md, aiGenerated: true })),
-          },
-          ejeValorativo: r.ejeValorativo ? {
-            create: {
-              nombreEje: r.ejeValorativo.nombreEje,
-              poloPositivo: r.ejeValorativo.poloPositivo ?? [],
-              poloNegativo: r.ejeValorativo.poloNegativo ?? [],
-              evidencia: r.ejeValorativo.evidencia,
+          derivedMetaphors: {
+            create: (r.derivedMetaphors ?? []).map((md: string) => ({
+              derivedMetaphor: md,
               aiGenerated: true,
-            },
-          } : undefined,
+            })),
+          },
+          valueAxis: r.valueAxis
+            ? {
+                create: {
+                  axisName: r.valueAxis.axisName,
+                  positivePolarity: r.valueAxis.positivePolarity ?? [],
+                  negativePolarity: r.valueAxis.negativePolarity ?? [],
+                  evidence: r.valueAxis.evidence,
+                  aiGenerated: true,
+                },
+              }
+            : undefined,
         },
       });
 
-      if (r.escenarioIds?.length) {
-        await this.prisma.escenarioRegimen.createMany({
-          data: r.escenarioIds.map((eid: string) => ({ regimenId: regimen.id, escenarioId: eid })),
+      if (r.scenarioIds?.length) {
+        await this.prisma.scenarioRegime.createMany({
+          data: r.scenarioIds.map((sid: string) => ({ regimeId: regime.id, scenarioId: sid })),
           skipDuplicates: true,
         });
       }
     }
 
-    await this.analisis.setNivelPendienteRevision(analisisId, 4);
-    return this.getResults(analisisId);
+    await this.analisis.setNivelPendienteRevision(analysisId, 4);
+    return this.getResults(analysisId);
   }
 
-  async getResults(analisisId: string) {
-    return this.prisma.regimenDeMetaforas.findMany({
-      where: { analisisId },
-      include: { escenarios: { include: { escenario: true } }, metaforasDerivadas: true, ejeValorativo: true },
-      orderBy: { frecuenciaAgregada: 'desc' },
+  async getResults(analysisId: string) {
+    return this.prisma.metaphorRegime.findMany({
+      where: { analysisId },
+      include: {
+        scenarios: { include: { scenario: true } },
+        derivedMetaphors: true,
+        valueAxis: true,
+      },
+      orderBy: { aggregateFrequency: 'desc' },
     });
   }
 }

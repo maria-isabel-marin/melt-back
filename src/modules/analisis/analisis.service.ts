@@ -1,95 +1,92 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { NivelStatus, ItemStatus } from '@prisma/client';
+import { LevelStatus, ItemStatus } from '@prisma/client';
 
-// Orden de niveles para la propagación de desactualización
-const NIVEL_ORDER = ['nivel1Status', 'nivel2Status', 'nivel3Status', 'nivel4Status', 'nivel5Status'] as const;
-type NivelKey = (typeof NIVEL_ORDER)[number];
+const LEVEL_ORDER = ['level1Status', 'level2Status', 'level3Status', 'level4Status', 'level5Status'] as const;
+type LevelKey = (typeof LEVEL_ORDER)[number];
 
 @Injectable()
 export class AnalisisService {
   constructor(private prisma: PrismaService) {}
 
-  async getAnalisis(analisisId: string) {
-    const analisis = await this.prisma.analisisDocumento.findUnique({
-      where: { id: analisisId },
-      include: { documento: true },
+  async getAnalisis(analysisId: string) {
+    const analysis = await this.prisma.documentAnalysis.findUnique({
+      where: { id: analysisId },
+      include: { document: true },
     });
-    if (!analisis) throw new NotFoundException('Análisis no encontrado');
-    return analisis;
+    if (!analysis) throw new NotFoundException('Analysis not found');
+    return analysis;
   }
 
-  async getFullAnalisis(analisisId: string) {
-    return this.prisma.analisisDocumento.findUnique({
-      where: { id: analisisId },
+  async getFullAnalisis(analysisId: string) {
+    return this.prisma.documentAnalysis.findUnique({
+      where: { id: analysisId },
       include: {
-        documento: true,
-        metaforasPrimarias: {
-          include: { correspondenciasOntologicas: true, correspondenciasEpistemicas: true },
+        document: true,
+        primaryMetaphors: {
+          include: { ontologicalMappings: true, epistemicMappings: true },
         },
-        metaforasConvencionales: { include: { metaforasPrimarias: true } },
-        escenarios: {
-          include: { gruposSociales: true, secuenciaNarrativa: true, sesgoEvaluativo: true, afectos: true },
+        conventionalMetaphors: { include: { primaryMetaphors: true } },
+        scenarios: {
+          include: { socialGroups: true, narrativeSequence: true, evaluativeBias: true, affects: true },
         },
-        regimenes: { include: { escenarios: true, metaforasDerivadas: true, ejeValorativo: true } },
-        narrativa: true,
+        regimes: { include: { scenarios: true, derivedMetaphors: true, valueAxis: true } },
+        culturalNarrative: true,
       },
     });
   }
 
-  /**
-   * Marks a nivel as approved and cascades DESACTUALIZADO to all downstream levels.
-   */
-  async approveNivel(analisisId: string, nivel: number) {
-    const key = NIVEL_ORDER[nivel - 1];
-    if (!key) throw new BadRequestException('Nivel inválido (1–5)');
+  async approveNivel(analysisId: string, nivel: number) {
+    const key = LEVEL_ORDER[nivel - 1];
+    if (!key) throw new BadRequestException('Invalid level (1–5)');
 
-    const downstreamKeys = NIVEL_ORDER.slice(nivel);
+    const downstreamKeys = LEVEL_ORDER.slice(nivel);
     const downstreamUpdate = Object.fromEntries(
-      downstreamKeys.map((k) => [k, NivelStatus.DESACTUALIZADO]),
+      downstreamKeys.map((k) => [k, LevelStatus.OUTDATED]),
     );
 
-    return this.prisma.analisisDocumento.update({
-      where: { id: analisisId },
+    return this.prisma.documentAnalysis.update({
+      where: { id: analysisId },
       data: {
-        [key]: NivelStatus.APROBADO,
+        [key]: LevelStatus.APPROVED,
         ...downstreamUpdate,
       },
     });
   }
 
-  /**
-   * Sets nivel status to PROCESANDO before AI call.
-   */
-  async setNivelProcesando(analisisId: string, nivel: number) {
-    const key = NIVEL_ORDER[nivel - 1];
-    if (!key) throw new BadRequestException('Nivel inválido');
-    return this.prisma.analisisDocumento.update({
-      where: { id: analisisId },
-      data: { [key]: NivelStatus.PROCESANDO },
+  async setNivelProcesando(analysisId: string, nivel: number) {
+    const key = LEVEL_ORDER[nivel - 1];
+    if (!key) throw new BadRequestException('Invalid level');
+    return this.prisma.documentAnalysis.update({
+      where: { id: analysisId },
+      data: { [key]: LevelStatus.PROCESSING },
     });
   }
 
-  /**
-   * Sets nivel status to PENDIENTE_REVISION after AI processing.
-   */
-  async setNivelPendienteRevision(analisisId: string, nivel: number) {
-    const key = NIVEL_ORDER[nivel - 1];
-    if (!key) throw new BadRequestException('Nivel inválido');
-    return this.prisma.analisisDocumento.update({
-      where: { id: analisisId },
-      data: { [key]: NivelStatus.PENDIENTE_REVISION },
+  async setNivelPendienteRevision(analysisId: string, nivel: number) {
+    const key = LEVEL_ORDER[nivel - 1];
+    if (!key) throw new BadRequestException('Invalid level');
+    return this.prisma.documentAnalysis.update({
+      where: { id: analysisId },
+      data: { [key]: LevelStatus.PENDING_REVIEW },
     });
   }
 
-  /**
-   * Updates item status for any reviewable entity.
-   */
   async updateItemStatus(
-    model: 'metaforaPrimaria' | 'correspondenciaOntologica' | 'correspondenciaEpistemica' |
-           'metaforaConvencional' | 'escenarioMetaforico' | 'grupoSocialPosicionado' |
-           'secuenciaNarrativa' | 'sesgoEvaluativo' | 'afecto' | 'regimenDeMetaforas' |
-           'regimenMetaforaDerivada' | 'ejeValorativo' | 'narrativaCultural',
+    model:
+      | 'primaryMetaphor'
+      | 'ontologicalMapping'
+      | 'epistemicMapping'
+      | 'conventionalMetaphor'
+      | 'metaphoricalScenario'
+      | 'positionedSocialGroup'
+      | 'narrativeSequence'
+      | 'evaluativeBias'
+      | 'affect'
+      | 'metaphorRegime'
+      | 'regimeDerivedMetaphor'
+      | 'valueAxis'
+      | 'culturalNarrative',
     id: string,
     status: ItemStatus,
     analystNote?: string,
@@ -100,43 +97,40 @@ export class AnalisisService {
     });
   }
 
-  /**
-   * Approves all items of a nivel in bulk.
-   */
-  async approveAllItems(analisisId: string, nivel: number) {
+  async approveAllItems(analysisId: string, nivel: number) {
     const updates: Promise<unknown>[] = [];
 
     if (nivel === 1) {
       updates.push(
-        this.prisma.metaforaPrimaria.updateMany({ where: { analisisId }, data: { itemStatus: 'APROBADO' } }),
-        this.prisma.correspondenciaOntologica.updateMany({
-          where: { metaforaPrimaria: { analisisId } },
-          data: { itemStatus: 'APROBADO' },
+        this.prisma.primaryMetaphor.updateMany({ where: { analysisId }, data: { itemStatus: 'APPROVED' } }),
+        this.prisma.ontologicalMapping.updateMany({
+          where: { primaryMetaphor: { analysisId } },
+          data: { itemStatus: 'APPROVED' },
         }),
-        this.prisma.correspondenciaEpistemica.updateMany({
-          where: { metaforaPrimaria: { analisisId } },
-          data: { itemStatus: 'APROBADO' },
+        this.prisma.epistemicMapping.updateMany({
+          where: { primaryMetaphor: { analysisId } },
+          data: { itemStatus: 'APPROVED' },
         }),
       );
     } else if (nivel === 2) {
       updates.push(
-        this.prisma.metaforaConvencional.updateMany({ where: { analisisId }, data: { itemStatus: 'APROBADO' } }),
+        this.prisma.conventionalMetaphor.updateMany({ where: { analysisId }, data: { itemStatus: 'APPROVED' } }),
       );
     } else if (nivel === 3) {
       updates.push(
-        this.prisma.escenarioMetaforico.updateMany({ where: { analisisId }, data: { itemStatus: 'APROBADO' } }),
+        this.prisma.metaphoricalScenario.updateMany({ where: { analysisId }, data: { itemStatus: 'APPROVED' } }),
       );
     } else if (nivel === 4) {
       updates.push(
-        this.prisma.regimenDeMetaforas.updateMany({ where: { analisisId }, data: { itemStatus: 'APROBADO' } }),
+        this.prisma.metaphorRegime.updateMany({ where: { analysisId }, data: { itemStatus: 'APPROVED' } }),
       );
     } else if (nivel === 5) {
       updates.push(
-        this.prisma.narrativaCultural.updateMany({ where: { analisisId }, data: { itemStatus: 'APROBADO' } }),
+        this.prisma.culturalNarrative.updateMany({ where: { analysisId }, data: { itemStatus: 'APPROVED' } }),
       );
     }
 
     await Promise.all(updates);
-    return this.approveNivel(analisisId, nivel);
+    return this.approveNivel(analysisId, nivel);
   }
 }

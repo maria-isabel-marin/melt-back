@@ -11,81 +11,79 @@ export class Nivel1Service {
     private analisis: AnalisisService,
   ) {}
 
-  async process(analisisId: string) {
-    await this.analisis.setNivelProcesando(analisisId, 1);
+  async process(analysisId: string) {
+    await this.analisis.setNivelProcesando(analysisId, 1);
 
-    const analisisDoc = await this.prisma.analisisDocumento.findUnique({
-      where: { id: analisisId },
-      include: { documento: true },
+    const analysisDoc = await this.prisma.documentAnalysis.findUnique({
+      where: { id: analysisId },
+      include: { document: true },
     });
 
     const systemPrompt = `Eres un experto en análisis de metáforas conceptuales aplicando el procedimiento MIPVU
 (Metaphor Identification Procedure VU) y la versión mejorada de Coll-Florit & Climent (2019).
 Tu tarea es identificar expresiones metafóricas en el texto y para cada una extraer:
-- expresionMetaforica: la expresión literal del texto
-- pagina: número de página aproximado
-- contexto: oración o párrafo donde aparece
-- foco: palabra clave metafórica
-- focoLemma: forma lema del foco
-- focoPartOfSpeech: categoría gramatical (NOUN, VERB, ADJ, ADV)
-- significadoContextual: significado en este contexto
-- significadoBasico: significado más concreto/primario
-- dominioFuente: dominio conceptual de origen
-- dominioMeta: dominio conceptual de destino
-- metaforaConceptual: forma canónica A ES B
-- correspondenciasOntologicas: array de {elementoFuente, elementoMeta, evidenciaTextual}
-- correspondenciasEpistemicas: array de {relacionFuente, inferenciaMeta, tipoInferencia}
-  (tipoInferencia: CAUSAL | TEMPORAL | CONDICIONAL | NORMATIVA | EVALUATIVA)
+- metaphoricalExpression: la expresión literal del texto
+- page: número de página aproximado
+- context: oración o párrafo donde aparece
+- focus: palabra clave metafórica
+- focusLemma: forma lema del foco
+- focusPartOfSpeech: categoría gramatical (NOUN, VERB, ADJ, ADV)
+- contextualMeaning: significado en este contexto
+- basicMeaning: significado más concreto/primario
+- sourceDomain: dominio conceptual de origen
+- targetDomain: dominio conceptual de destino
+- conceptualMetaphor: forma canónica A ES B
+- ontologicalMappings: array de {sourceElement, targetElement, textualEvidence}
+- epistemicMappings: array de {sourceRelation, targetInference, inferenceType}
+  (inferenceType: CAUSAL | TEMPORAL | CONDITIONAL | NORMATIVE | EVALUATIVE)
 
 Responde ÚNICAMENTE con un JSON válido en el formato:
 \`\`\`json
-{ "metaforas": [ { ...campos }, ... ] }
+{ "metaphors": [ { ...campos }, ... ] }
 \`\`\``;
 
-    const content = analisisDoc?.documento.fileUrl
-      ? `Analiza el siguiente documento: ${analisisDoc.documento.titulo}\n[El contenido será extraído del archivo]`
-      : `Analiza el documento: ${analisisDoc?.documento.titulo}`;
+    const content = analysisDoc?.document.fileUrl
+      ? `Analiza el siguiente documento: ${analysisDoc.document.title}\n[El contenido será extraído del archivo]`
+      : `Analiza el documento: ${analysisDoc?.document.title}`;
 
-    const result = await this.ai.completeJson<{ metaforas: any[] }>(
-      analisisDoc!.aiProvider,
+    const result = await this.ai.completeJson<{ metaphors: any[] }>(
+      analysisDoc!.aiProvider,
       [{ role: 'user', content }],
       systemPrompt,
     );
 
-    // Clear previous results for this nivel
-    await this.prisma.metaforaPrimaria.deleteMany({ where: { analisisId } });
+    await this.prisma.primaryMetaphor.deleteMany({ where: { analysisId } });
 
-    // Persist AI results
-    for (const m of result.metaforas) {
-      await this.prisma.metaforaPrimaria.create({
+    for (const m of result.metaphors) {
+      await this.prisma.primaryMetaphor.create({
         data: {
-          analisisId,
-          expresionMetaforica: m.expresionMetaforica,
-          pagina: m.pagina,
-          contexto: m.contexto,
-          foco: m.foco,
-          focoLemma: m.focoLemma,
-          focoPartOfSpeech: m.focoPartOfSpeech,
-          significadoContextual: m.significadoContextual,
-          significadoBasico: m.significadoBasico,
-          dominioFuente: m.dominioFuente,
-          dominioMeta: m.dominioMeta,
-          metaforaConceptual: m.metaforaConceptual,
+          analysisId,
+          metaphoricalExpression: m.metaphoricalExpression,
+          page: m.page,
+          context: m.context,
+          focus: m.focus,
+          focusLemma: m.focusLemma,
+          focusPartOfSpeech: m.focusPartOfSpeech,
+          contextualMeaning: m.contextualMeaning,
+          basicMeaning: m.basicMeaning,
+          sourceDomain: m.sourceDomain,
+          targetDomain: m.targetDomain,
+          conceptualMetaphor: m.conceptualMetaphor,
           aiGenerated: true,
-          correspondenciasOntologicas: {
-            create: (m.correspondenciasOntologicas ?? []).map((c: any) => ({
-              elementoFuente: c.elementoFuente,
-              elementoMeta: c.elementoMeta,
-              evidenciaTextual: c.evidenciaTextual,
+          ontologicalMappings: {
+            create: (m.ontologicalMappings ?? []).map((c: any) => ({
+              sourceElement: c.sourceElement,
+              targetElement: c.targetElement,
+              textualEvidence: c.textualEvidence,
               aiGenerated: true,
             })),
           },
-          correspondenciasEpistemicas: {
-            create: (m.correspondenciasEpistemicas ?? []).map((c: any) => ({
-              relacionFuente: c.relacionFuente,
-              inferenciaMeta: c.inferenciaMeta,
-              tipoInferencia: c.tipoInferencia,
-              evidenciaTextual: c.evidenciaTextual,
+          epistemicMappings: {
+            create: (m.epistemicMappings ?? []).map((c: any) => ({
+              sourceRelation: c.sourceRelation,
+              targetInference: c.targetInference,
+              inferenceType: c.inferenceType,
+              textualEvidence: c.textualEvidence,
               aiGenerated: true,
             })),
           },
@@ -93,18 +91,18 @@ Responde ÚNICAMENTE con un JSON válido en el formato:
       });
     }
 
-    await this.analisis.setNivelPendienteRevision(analisisId, 1);
-    return this.prisma.metaforaPrimaria.findMany({
-      where: { analisisId },
-      include: { correspondenciasOntologicas: true, correspondenciasEpistemicas: true },
+    await this.analisis.setNivelPendienteRevision(analysisId, 1);
+    return this.prisma.primaryMetaphor.findMany({
+      where: { analysisId },
+      include: { ontologicalMappings: true, epistemicMappings: true },
     });
   }
 
-  async getResults(analisisId: string) {
-    return this.prisma.metaforaPrimaria.findMany({
-      where: { analisisId },
-      include: { correspondenciasOntologicas: true, correspondenciasEpistemicas: true },
-      orderBy: [{ pagina: 'asc' }, { createdAt: 'asc' }],
+  async getResults(analysisId: string) {
+    return this.prisma.primaryMetaphor.findMany({
+      where: { analysisId },
+      include: { ontologicalMappings: true, epistemicMappings: true },
+      orderBy: [{ page: 'asc' }, { createdAt: 'asc' }],
     });
   }
 }

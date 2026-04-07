@@ -11,16 +11,16 @@ export class Nivel3Service {
     private analisis: AnalisisService,
   ) {}
 
-  async process(analisisId: string) {
-    await this.analisis.setNivelProcesando(analisisId, 3);
+  async process(analysisId: string) {
+    await this.analisis.setNivelProcesando(analysisId, 3);
 
-    const analisisDoc = await this.prisma.analisisDocumento.findUnique({
-      where: { id: analisisId },
+    const analysisDoc = await this.prisma.documentAnalysis.findUnique({
+      where: { id: analysisId },
       include: {
-        metaforasConvencionales: { where: { itemStatus: 'APROBADO' } },
-        metaforasPrimarias: {
-          where: { itemStatus: 'APROBADO' },
-          include: { correspondenciasOntologicas: true, correspondenciasEpistemicas: true },
+        conventionalMetaphors: { where: { itemStatus: 'APPROVED' } },
+        primaryMetaphors: {
+          where: { itemStatus: 'APPROVED' },
+          include: { ontologicalMappings: true, epistemicMappings: true },
         },
       },
     });
@@ -30,73 +30,96 @@ Para cada metáfora convencional aprobada, identifica los escenarios metafórico
 Un escenario es una mini-narrativa estructurada que la metáfora pone en juego.
 
 Para cada escenario retorna:
-- metaforaConvencionalId: ID de la metáfora convencional base
-- nombreEscenario: nombre descriptivo del escenario
-- estatus: DOMINANTE | CHALLENGER | EMERGENTE | PERIFERICO
-- valoracionUso: POSITIVO | NEGATIVO | NEUTRO
-- idCorrespondencias: array de IDs de correspondencias relevantes
-- gruposSociales: array de { grupoSocial, accionesLegitimadas[] }
-- secuenciaNarrativa: { acto1Inicio, acto2Desarrollo, acto3Desenlace, tipo: TEMPORAL|CAUSAL }
-- sesgoEvaluativo: { positivo[], negativo[] }
-- afectos: array de { tipoAfecto: FACILITADO|INHIBIDO, nombreAfecto, descripcion, funcionSocial, marcadoresLinguisticos }
+- conventionalMetaphorId: ID de la metáfora convencional base
+- scenarioName: nombre descriptivo del escenario
+- status: DOMINANT | CHALLENGER | EMERGING | PERIPHERAL
+- usageValuation: POSITIVE | NEGATIVE | NEUTRAL
+- mappingIds: array de IDs de correspondencias relevantes
+- socialGroups: array de { socialGroup, legitimizedActions[] }
+- narrativeSequence: { act1Beginning, act2Development, act3Resolution, sequenceType: TEMPORAL|CAUSAL }
+- evaluativeBias: { positive[], negative[] }
+- affects: array de { affectType: FACILITATED|INHIBITED, affectName, description, socialFunction, linguisticMarkers }
 
 Responde ÚNICAMENTE con JSON:
 \`\`\`json
-{ "escenarios": [ { ...campos } ] }
+{ "scenarios": [ { ...campos } ] }
 \`\`\``;
 
     const input = {
-      metaforasConvencionales: analisisDoc?.metaforasConvencionales,
-      correspondencias: analisisDoc?.metaforasPrimarias.flatMap((m) => [
-        ...m.correspondenciasOntologicas.map((c) => ({ ...c, tipo: 'ontologica' })),
-        ...m.correspondenciasEpistemicas.map((c) => ({ ...c, tipo: 'epistemica' })),
+      conventionalMetaphors: analysisDoc?.conventionalMetaphors,
+      mappings: analysisDoc?.primaryMetaphors.flatMap((m) => [
+        ...m.ontologicalMappings.map((c) => ({ ...c, type: 'ontological' })),
+        ...m.epistemicMappings.map((c) => ({ ...c, type: 'epistemic' })),
       ]),
     };
 
-    const result = await this.ai.completeJson<{ escenarios: any[] }>(
-      analisisDoc!.aiProvider,
+    const result = await this.ai.completeJson<{ scenarios: any[] }>(
+      analysisDoc!.aiProvider,
       [{ role: 'user', content: JSON.stringify(input) }],
       systemPrompt,
     );
 
-    await this.prisma.escenarioMetaforico.deleteMany({ where: { analisisId } });
+    await this.prisma.metaphoricalScenario.deleteMany({ where: { analysisId } });
 
-    for (const e of result.escenarios) {
-      await this.prisma.escenarioMetaforico.create({
+    for (const e of result.scenarios) {
+      await this.prisma.metaphoricalScenario.create({
         data: {
-          analisisId,
-          metaforaConvencionalId: e.metaforaConvencionalId,
-          nombreEscenario: e.nombreEscenario,
-          estatus: e.estatus,
-          valoracionUso: e.valoracionUso,
-          idCorrespondencias: e.idCorrespondencias ?? [],
+          analysisId,
+          conventionalMetaphorId: e.conventionalMetaphorId,
+          scenarioName: e.scenarioName,
+          status: e.status,
+          usageValuation: e.usageValuation,
+          mappingIds: e.mappingIds ?? [],
           aiGenerated: true,
-          gruposSociales: { create: (e.gruposSociales ?? []).map((g: any) => ({ grupoSocial: g.grupoSocial, accionesLegitimadas: g.accionesLegitimadas ?? [], aiGenerated: true })) },
-          secuenciaNarrativa: e.secuenciaNarrativa ? {
-            create: {
-              acto1Inicio: e.secuenciaNarrativa.acto1Inicio,
-              acto2Desarrollo: e.secuenciaNarrativa.acto2Desarrollo,
-              acto3Desenlace: e.secuenciaNarrativa.acto3Desenlace,
-              tipo: e.secuenciaNarrativa.tipo,
+          socialGroups: {
+            create: (e.socialGroups ?? []).map((g: any) => ({
+              socialGroup: g.socialGroup,
+              legitimizedActions: g.legitimizedActions ?? [],
               aiGenerated: true,
-            },
-          } : undefined,
-          sesgoEvaluativo: e.sesgoEvaluativo ? {
-            create: { positivo: e.sesgoEvaluativo.positivo ?? [], negativo: e.sesgoEvaluativo.negativo ?? [], aiGenerated: true },
-          } : undefined,
-          afectos: { create: (e.afectos ?? []).map((a: any) => ({ tipoAfecto: a.tipoAfecto, nombreAfecto: a.nombreAfecto, descripcion: a.descripcion, funcionSocial: a.funcionSocial, marcadoresLinguisticos: a.marcadoresLinguisticos, aiGenerated: true })) },
+            })),
+          },
+          narrativeSequence: e.narrativeSequence
+            ? {
+                create: {
+                  act1Beginning: e.narrativeSequence.act1Beginning,
+                  act2Development: e.narrativeSequence.act2Development,
+                  act3Resolution: e.narrativeSequence.act3Resolution,
+                  sequenceType: e.narrativeSequence.sequenceType,
+                  aiGenerated: true,
+                },
+              }
+            : undefined,
+          evaluativeBias: e.evaluativeBias
+            ? {
+                create: {
+                  positive: e.evaluativeBias.positive ?? [],
+                  negative: e.evaluativeBias.negative ?? [],
+                  aiGenerated: true,
+                },
+              }
+            : undefined,
+          affects: {
+            create: (e.affects ?? []).map((a: any) => ({
+              affectType: a.affectType,
+              affectName: a.affectName,
+              description: a.description,
+              socialFunction: a.socialFunction,
+              linguisticMarkers: a.linguisticMarkers,
+              aiGenerated: true,
+            })),
+          },
         },
       });
     }
 
-    await this.analisis.setNivelPendienteRevision(analisisId, 3);
-    return this.getResults(analisisId);
+    await this.analisis.setNivelPendienteRevision(analysisId, 3);
+    return this.getResults(analysisId);
   }
 
-  async getResults(analisisId: string) {
-    return this.prisma.escenarioMetaforico.findMany({
-      where: { analisisId },
-      include: { gruposSociales: true, secuenciaNarrativa: true, sesgoEvaluativo: true, afectos: true },
+  async getResults(analysisId: string) {
+    return this.prisma.metaphoricalScenario.findMany({
+      where: { analysisId },
+      include: { socialGroups: true, narrativeSequence: true, evaluativeBias: true, affects: true },
     });
   }
 }

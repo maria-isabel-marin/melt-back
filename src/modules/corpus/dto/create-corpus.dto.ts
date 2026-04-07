@@ -1,7 +1,7 @@
 export class CreateCorpusDto {
-  nombre: string;
-  descripcion?: string;
-  tamanoPalabras?: number;
-  comunidadDiscursiva?: string;
-  generoTextual?: string;
+  name: string;
+  description?: string;
+  wordCount?: number;
+  discursiveCommunity?: string;
+  textualGenre?: string;
 }
