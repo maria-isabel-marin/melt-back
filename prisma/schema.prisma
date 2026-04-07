@@ -1,0 +1,601 @@
+// =============================================================================
+// MELT-BACK — Prisma Schema
+// PostgreSQL · Stack: NestJS + Prisma + PostgreSQL
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// =============================================================================
+// AUTH & USERS
+// =============================================================================
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String?
+  avatarUrl String?
+  googleId  String?  @unique
+  isGuest   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  corpora UserCorpus[]
+
+  @@map("users")
+}
+
+// =============================================================================
+// NIVEL 0 — CORPUS Y DOCUMENTOS
+// =============================================================================
+
+model Corpus {
+  id                  String   @id @default(uuid())
+  nombre              String   @db.VarChar(200)
+  descripcion         String?
+  tamanoPalabras      Int?
+  comunidadDiscursiva String?  @db.VarChar(200)
+  generoTextual       String?  @db.VarChar(100)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  usuarios   UserCorpus[]
+  documentos Documento[]
+
+  @@map("corpus")
+}
+
+model UserCorpus {
+  userId   String
+  corpusId String
+  role     UserCorpusRole @default(OWNER)
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  corpus Corpus @relation(fields: [corpusId], references: [id], onDelete: Cascade)
+
+  @@id([userId, corpusId])
+  @@map("user_corpus")
+}
+
+enum UserCorpusRole {
+  OWNER
+  COLLABORATOR
+  VIEWER
+}
+
+model Documento {
+  id            String         @id @default(uuid())
+  corpusId      String
+  titulo        String         @db.VarChar(300)
+  descripcion   String?
+  fecha         DateTime?
+  autor         String?        @db.VarChar(200)
+  tipoDocumento TipoDocumento?
+  idioma        Idioma         @default(SPANISH)
+  contenido     Bytes?
+  nroPaginas    Int?
+  nroTokens     Int?
+  fileUrl       String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  corpus   Corpus             @relation(fields: [corpusId], references: [id], onDelete: Cascade)
+  analisis AnalisisDocumento?
+
+  @@map("documentos")
+}
+
+enum TipoDocumento {
+  ARTICULO_ACADEMICO
+  DISCURSO_POLITICO
+  NOTICIA
+  EDITORIAL
+  ENTREVISTA
+  DOCUMENTO_OFICIAL
+  REDES_SOCIALES
+  OTRO
+}
+
+enum Idioma {
+  SPANISH
+  ENGLISH
+}
+
+// =============================================================================
+// ANÁLISIS POR DOCUMENTO — Control de estado del pipeline MELT
+// =============================================================================
+
+model AnalisisDocumento {
+  id          String     @id @default(uuid())
+  documentoId String     @unique
+  aiProvider  AiProvider @default(CLAUDE)
+
+  nivel0Status NivelStatus @default(PENDIENTE)
+  nivel1Status NivelStatus @default(PENDIENTE)
+  nivel2Status NivelStatus @default(PENDIENTE)
+  nivel3Status NivelStatus @default(PENDIENTE)
+  nivel4Status NivelStatus @default(PENDIENTE)
+  nivel5Status NivelStatus @default(PENDIENTE)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  documento               Documento              @relation(fields: [documentoId], references: [id], onDelete: Cascade)
+  metaforasPrimarias      MetaforaPrimaria[]
+  metaforasConvencionales MetaforaConvencional[]
+  escenarios              EscenarioMetaforico[]
+  regimenes               RegimenDeMetaforas[]
+  narrativa               NarrativaCultural?
+
+  @@map("analisis_documento")
+}
+
+enum NivelStatus {
+  PENDIENTE
+  PROCESANDO
+  PENDIENTE_REVISION
+  APROBADO
+  DESACTUALIZADO
+}
+
+enum AiProvider {
+  CLAUDE
+  OPENAI
+  HUGGINGFACE
+}
+
+// =============================================================================
+// NIVEL 1 — METÁFORAS PRIMARIAS
+// =============================================================================
+
+model MetaforaPrimaria {
+  id                    String     @id @default(uuid())
+  analisisId            String
+  pagina                Int?
+  expresionMetaforica   String     @db.VarChar(500)
+  contexto              String?
+  foco                  String?    @db.VarChar(100)
+  focoLemma             String?    @db.VarChar(100)
+  focoPartOfSpeech      String?    @db.VarChar(100)
+  significadoContextual String?    @db.VarChar(500)
+  significadoBasico     String?    @db.VarChar(500)
+  dominioFuente         String?    @db.VarChar(200)
+  dominioMeta           String?    @db.VarChar(200)
+  metaforaConceptual    String?    @db.VarChar(500)
+  itemStatus            ItemStatus @default(PENDIENTE_REVISION)
+  aiGenerated           Boolean    @default(true)
+  analystNote           String?
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  analisis                     AnalisisDocumento            @relation(fields: [analisisId], references: [id], onDelete: Cascade)
+  correspondenciasOntologicas  CorrespondenciaOntologica[]
+  correspondenciasEpistemicas  CorrespondenciaEpistemica[]
+  metaforasConvencionales      MetaforaPrimariaConvencional[]
+
+  @@map("metaforas_primarias")
+}
+
+enum ItemStatus {
+  PENDIENTE_REVISION
+  APROBADO
+  RECHAZADO
+  MODIFICADO
+}
+
+model CorrespondenciaOntologica {
+  id                 String     @id @default(uuid())
+  metaforaPrimariaId String
+  elementoFuente     String     @db.VarChar(200)
+  elementoMeta       String     @db.VarChar(200)
+  evidenciaTextual   String?
+  itemStatus         ItemStatus @default(PENDIENTE_REVISION)
+  aiGenerated        Boolean    @default(true)
+  analystNote        String?
+  createdAt          DateTime   @default(now())
+
+  metaforaPrimaria MetaforaPrimaria @relation(fields: [metaforaPrimariaId], references: [id], onDelete: Cascade)
+
+  @@map("correspondencias_ontologicas")
+}
+
+model CorrespondenciaEpistemica {
+  id                 String         @id @default(uuid())
+  metaforaPrimariaId String
+  relacionFuente     String         @db.VarChar(300)
+  inferenciaMeta     String         @db.VarChar(300)
+  tipoInferencia     TipoInferencia
+  evidenciaTextual   String?
+  itemStatus         ItemStatus     @default(PENDIENTE_REVISION)
+  aiGenerated        Boolean        @default(true)
+  analystNote        String?
+  createdAt          DateTime       @default(now())
+
+  metaforaPrimaria MetaforaPrimaria @relation(fields: [metaforaPrimariaId], references: [id], onDelete: Cascade)
+
+  @@map("correspondencias_epistemicas")
+}
+
+enum TipoInferencia {
+  CAUSAL
+  TEMPORAL
+  CONDICIONAL
+  NORMATIVA
+  EVALUATIVA
+}
+
+// =============================================================================
+// NIVEL 2 — METÁFORAS CONVENCIONALES
+// =============================================================================
+
+model MetaforaConvencional {
+  id                  String                      @id @default(uuid())
+  analisisId          String
+  metaforaConceptual  String                      @db.VarChar(500)
+  dominioFuente       String                      @db.VarChar(200)
+  dominioMeta         String                      @db.VarChar(200)
+  enfoque             EnfoqueConvencionalizacion
+  frecuenciaAbsoluta  Int                         @default(0)
+  distribucionTextual Json?
+  robustez            RobustezConvencionalizacion
+  contextoUso         String?
+  itemStatus          ItemStatus                  @default(PENDIENTE_REVISION)
+  aiGenerated         Boolean                     @default(true)
+  analystNote         String?
+  createdAt           DateTime                    @default(now())
+  updatedAt           DateTime                    @updatedAt
+
+  analisis           AnalisisDocumento              @relation(fields: [analisisId], references: [id], onDelete: Cascade)
+  metaforasPrimarias MetaforaPrimariaConvencional[]
+  escenarios         EscenarioMetaforico[]
+
+  @@map("metaforas_convencionales")
+}
+
+enum EnfoqueConvencionalizacion {
+  FRECUENCIA
+  CLUSTER_TEMATICO
+}
+
+enum RobustezConvencionalizacion {
+  ALTA
+  MODERADA
+  DEBIL
+}
+
+// M:N — MetaforaPrimaria <-> MetaforaConvencional
+model MetaforaPrimariaConvencional {
+  metaforaConvencionalId String
+  metaforaPrimariaId     String
+
+  metaforaConvencional MetaforaConvencional @relation(fields: [metaforaConvencionalId], references: [id], onDelete: Cascade)
+  metaforaPrimaria     MetaforaPrimaria     @relation(fields: [metaforaPrimariaId], references: [id], onDelete: Cascade)
+
+  @@id([metaforaConvencionalId, metaforaPrimariaId])
+  @@map("metaforas_primarias_convencionales")
+}
+
+// =============================================================================
+// NIVEL 3 — ESCENARIOS METAFÓRICOS
+// =============================================================================
+
+model EscenarioMetaforico {
+  id                     String           @id @default(uuid())
+  analisisId             String
+  metaforaConvencionalId String
+  nombreEscenario        String           @db.VarChar(200)
+  idCorrespondencias     String[]
+  estatus                EstatusEscenario
+  valoracionUso          ValoracionUso
+  itemStatus             ItemStatus       @default(PENDIENTE_REVISION)
+  aiGenerated            Boolean          @default(true)
+  analystNote            String?
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
+
+  analisis             AnalisisDocumento    @relation(fields: [analisisId], references: [id], onDelete: Cascade)
+  metaforaConvencional MetaforaConvencional @relation(fields: [metaforaConvencionalId], references: [id], onDelete: Cascade)
+  gruposSociales       GrupoSocialPosicionado[]
+  secuenciaNarrativa   SecuenciaNarrativa?
+  sesgoEvaluativo      SesgoEvaluativo?
+  afectos              Afecto[]
+  regimenes            EscenarioRegimen[]
+
+  @@map("escenarios_metaforicos")
+}
+
+enum EstatusEscenario {
+  DOMINANTE
+  CHALLENGER
+  EMERGENTE
+  PERIFERICO
+}
+
+enum ValoracionUso {
+  POSITIVO
+  NEGATIVO
+  NEUTRO
+}
+
+model GrupoSocialPosicionado {
+  id                  String     @id @default(uuid())
+  escenarioId         String
+  grupoSocial         String     @db.VarChar(200)
+  accionesLegitimadas String[]
+  itemStatus          ItemStatus @default(PENDIENTE_REVISION)
+  aiGenerated         Boolean    @default(true)
+  analystNote         String?
+  createdAt           DateTime   @default(now())
+
+  escenario EscenarioMetaforico @relation(fields: [escenarioId], references: [id], onDelete: Cascade)
+
+  @@map("grupos_sociales_posicionados")
+}
+
+model SecuenciaNarrativa {
+  id              String        @id @default(uuid())
+  escenarioId     String        @unique
+  acto1Inicio     String
+  acto2Desarrollo String
+  acto3Desenlace  String
+  tipo            TipoSecuencia
+  itemStatus      ItemStatus    @default(PENDIENTE_REVISION)
+  aiGenerated     Boolean       @default(true)
+  analystNote     String?
+  createdAt       DateTime      @default(now())
+
+  escenario EscenarioMetaforico @relation(fields: [escenarioId], references: [id], onDelete: Cascade)
+
+  @@map("secuencias_narrativas")
+}
+
+enum TipoSecuencia {
+  TEMPORAL
+  CAUSAL
+}
+
+model SesgoEvaluativo {
+  id          String     @id @default(uuid())
+  escenarioId String     @unique
+  positivo    String[]
+  negativo    String[]
+  itemStatus  ItemStatus @default(PENDIENTE_REVISION)
+  aiGenerated Boolean    @default(true)
+  analystNote String?
+  createdAt   DateTime   @default(now())
+
+  escenario EscenarioMetaforico @relation(fields: [escenarioId], references: [id], onDelete: Cascade)
+
+  @@map("sesgos_evaluativos")
+}
+
+model Afecto {
+  id                     String     @id @default(uuid())
+  escenarioId            String
+  tipoAfecto             TipoAfecto
+  nombreAfecto           String     @db.VarChar(200)
+  descripcion            String?
+  funcionSocial          String?
+  marcadoresLinguisticos String?
+  itemStatus             ItemStatus @default(PENDIENTE_REVISION)
+  aiGenerated            Boolean    @default(true)
+  analystNote            String?
+  createdAt              DateTime   @default(now())
+
+  escenario EscenarioMetaforico @relation(fields: [escenarioId], references: [id], onDelete: Cascade)
+
+  @@map("afectos")
+}
+
+enum TipoAfecto {
+  FACILITADO
+  INHIBIDO
+}
+
+// =============================================================================
+// NIVEL 4 — REGÍMENES DE METÁFORAS
+// =============================================================================
+
+model RegimenDeMetaforas {
+  id                 String     @id @default(uuid())
+  analisisId         String
+  nombreRegimen      String     @db.VarChar(300)
+  frecuenciaAgregada Int        @default(0)
+  metaforas          String[]
+  itemStatus         ItemStatus @default(PENDIENTE_REVISION)
+  aiGenerated        Boolean    @default(true)
+  analystNote        String?
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  analisis           AnalisisDocumento       @relation(fields: [analisisId], references: [id], onDelete: Cascade)
+  escenarios         EscenarioRegimen[]
+  metaforasDerivadas RegimenMetaforaDerivada[]
+  ejeValorativo      EjeValorativo?
+  narrativa          NarrativaCultural?
+
+  @@map("regimenes_de_metaforas")
+}
+
+// M:N — EscenarioMetaforico <-> RegimenDeMetaforas
+model EscenarioRegimen {
+  regimenId   String
+  escenarioId String
+
+  regimen   RegimenDeMetaforas  @relation(fields: [regimenId], references: [id], onDelete: Cascade)
+  escenario EscenarioMetaforico @relation(fields: [escenarioId], references: [id], onDelete: Cascade)
+
+  @@id([regimenId, escenarioId])
+  @@map("escenarios_regimenes")
+}
+
+model RegimenMetaforaDerivada {
+  id               String     @id @default(uuid())
+  regimenId        String
+  metaforaDerivada String
+  itemStatus       ItemStatus @default(PENDIENTE_REVISION)
+  aiGenerated      Boolean    @default(true)
+  analystNote      String?
+  createdAt        DateTime   @default(now())
+
+  regimen RegimenDeMetaforas @relation(fields: [regimenId], references: [id], onDelete: Cascade)
+
+  @@map("regimenes_metaforas_derivadas")
+}
+
+model EjeValorativo {
+  id           String     @id @default(uuid())
+  regimenId    String     @unique
+  nombreEje    String     @db.VarChar(200)
+  poloPositivo String[]
+  poloNegativo String[]
+  evidencia    String?
+  itemStatus   ItemStatus @default(PENDIENTE_REVISION)
+  aiGenerated  Boolean    @default(true)
+  analystNote  String?
+  createdAt    DateTime   @default(now())
+
+  regimen RegimenDeMetaforas @relation(fields: [regimenId], references: [id], onDelete: Cascade)
+
+  @@map("ejes_valorativos")
+}
+
+// =============================================================================
+// NIVEL 5 — NARRATIVA CULTURAL
+// =============================================================================
+
+model NarrativaCultural {
+  id                  String     @id @default(uuid())
+  analisisId          String     @unique
+  regimenId           String     @unique
+  nombre              String     @db.VarChar(300)
+  descripcion         String?    @db.VarChar(1000)
+  distribucionTextual String[]
+  itemStatus          ItemStatus @default(PENDIENTE_REVISION)
+  aiGenerated         Boolean    @default(true)
+  analystNote         String?
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+
+  analisis AnalisisDocumento  @relation(fields: [analisisId], references: [id], onDelete: Cascade)
+  regimen  RegimenDeMetaforas @relation(fields: [regimenId], references: [id], onDelete: Cascade)
+
+  @@map("narrativas_culturales")
+}
+
+// =============================================================================
+// ANÁLISIS CONSOLIDADO (multi-documento, a nivel de corpus)
+// =============================================================================
+
+model AnalisisConsolidado {
+  id           String     @id @default(uuid())
+  corpusId     String
+  nombre       String     @db.VarChar(300)
+  documentoIds String[]
+  aiProvider   AiProvider @default(CLAUDE)
+
+  nivel2Status NivelStatus @default(PENDIENTE)
+  nivel3Status NivelStatus @default(PENDIENTE)
+  nivel4Status NivelStatus @default(PENDIENTE)
+  nivel5Status NivelStatus @default(PENDIENTE)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  metaforasConvencionales MetaforaConvencionalConsolidada[]
+  escenarios              EscenarioConsolidado[]
+  regimenes               RegimenConsolidado[]
+  narrativa               NarrativaConsolidada?
+
+  @@map("analisis_consolidados")
+}
+
+model MetaforaConvencionalConsolidada {
+  id                    String                      @id @default(uuid())
+  analisisConsolidadoId String
+  metaforaConceptual    String                      @db.VarChar(500)
+  dominioFuente         String                      @db.VarChar(200)
+  dominioMeta           String                      @db.VarChar(200)
+  enfoque               EnfoqueConvencionalizacion
+  frecuenciaAbsoluta    Int                         @default(0)
+  distribucionTextual   Json?
+  robustez              RobustezConvencionalizacion
+  itemStatus            ItemStatus                  @default(PENDIENTE_REVISION)
+  aiGenerated           Boolean                     @default(true)
+  analystNote           String?
+  createdAt             DateTime                    @default(now())
+
+  analisisConsolidado AnalisisConsolidado    @relation(fields: [analisisConsolidadoId], references: [id], onDelete: Cascade)
+  escenarios          EscenarioConsolidado[]
+
+  @@map("metaforas_convencionales_consolidadas")
+}
+
+model EscenarioConsolidado {
+  id                                String           @id @default(uuid())
+  analisisConsolidadoId             String
+  metaforaConvencionalConsolidadaId String
+  nombreEscenario                   String           @db.VarChar(200)
+  estatus                           EstatusEscenario
+  valoracionUso                     ValoracionUso
+  itemStatus                        ItemStatus       @default(PENDIENTE_REVISION)
+  aiGenerated                       Boolean          @default(true)
+  analystNote                       String?
+  createdAt                         DateTime         @default(now())
+
+  analisisConsolidado  AnalisisConsolidado             @relation(fields: [analisisConsolidadoId], references: [id], onDelete: Cascade)
+  metaforaConvencional MetaforaConvencionalConsolidada @relation(fields: [metaforaConvencionalConsolidadaId], references: [id], onDelete: Cascade)
+  regimenes            RegimenConsolidadoEscenario[]
+
+  @@map("escenarios_consolidados")
+}
+
+model RegimenConsolidado {
+  id                    String     @id @default(uuid())
+  analisisConsolidadoId String
+  nombreRegimen         String     @db.VarChar(300)
+  frecuenciaAgregada    Int        @default(0)
+  itemStatus            ItemStatus @default(PENDIENTE_REVISION)
+  aiGenerated           Boolean    @default(true)
+  analystNote           String?
+  createdAt             DateTime   @default(now())
+
+  analisisConsolidado AnalisisConsolidado         @relation(fields: [analisisConsolidadoId], references: [id], onDelete: Cascade)
+  escenarios          RegimenConsolidadoEscenario[]
+  narrativa           NarrativaConsolidada?
+
+  @@map("regimenes_consolidados")
+}
+
+model RegimenConsolidadoEscenario {
+  regimenConsolidadoId   String
+  escenarioConsolidadoId String
+
+  regimen   RegimenConsolidado   @relation(fields: [regimenConsolidadoId], references: [id], onDelete: Cascade)
+  escenario EscenarioConsolidado @relation(fields: [escenarioConsolidadoId], references: [id], onDelete: Cascade)
+
+  @@id([regimenConsolidadoId, escenarioConsolidadoId])
+  @@map("regimenes_consolidados_escenarios")
+}
+
+model NarrativaConsolidada {
+  id                    String     @id @default(uuid())
+  analisisConsolidadoId String     @unique
+  regimenConsolidadoId  String     @unique
+  nombre                String     @db.VarChar(300)
+  descripcion           String?    @db.VarChar(1000)
+  itemStatus            ItemStatus @default(PENDIENTE_REVISION)
+  aiGenerated           Boolean    @default(true)
+  analystNote           String?
+  createdAt             DateTime   @default(now())
+
+  analisisConsolidado AnalisisConsolidado @relation(fields: [analisisConsolidadoId], references: [id], onDelete: Cascade)
+  regimen             RegimenConsolidado  @relation(fields: [regimenConsolidadoId], references: [id], onDelete: Cascade)
+
+  @@map("narrativas_consolidadas")
+}
