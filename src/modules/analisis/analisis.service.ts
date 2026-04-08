@@ -40,10 +40,20 @@ export class AnalisisService {
     const key = LEVEL_ORDER[nivel - 1];
     if (!key) throw new BadRequestException('Invalid level (1–5)');
 
+    // Only mark downstream levels as OUTDATED if they were already processed
+    // (PENDING_REVIEW or APPROVED). Levels still PENDING stay PENDING.
+    const current = await this.prisma.documentAnalysis.findUnique({
+      where: { id: analysisId },
+    });
+
     const downstreamKeys = LEVEL_ORDER.slice(nivel);
-    const downstreamUpdate = Object.fromEntries(
-      downstreamKeys.map((k) => [k, LevelStatus.OUTDATED]),
-    );
+    const downstreamUpdate: Partial<Record<LevelKey, LevelStatus>> = {};
+    for (const k of downstreamKeys) {
+      const currentStatus = current?.[k];
+      if (currentStatus && currentStatus !== LevelStatus.PENDING) {
+        downstreamUpdate[k] = LevelStatus.OUTDATED;
+      }
+    }
 
     return this.prisma.documentAnalysis.update({
       where: { id: analysisId },
