@@ -42,6 +42,7 @@ model Corpus {
 
   users     UserCorpus[]
   documents Document[]
+  pipelines DocumentIngestionPipeline[]  // <--- NUEVO
 
   @@map("corpus")
 }
@@ -100,6 +101,27 @@ enum DocumentType {
 enum Language {
   SPANISH
   ENGLISH
+}
+
+// =============================================================================
+// DOCUMENT INGESTION — Pipeline de Preprocesado
+// =============================================================================
+
+model DocumentIngestionPipeline {
+  id          String  @id @default(uuid())
+  name        String  @db.VarChar(200)
+  description String?
+  corpusId    String
+
+  // Configuración opcional
+  author       String?
+  language     Language?
+  documentType DocumentType?
+  customOptions Json?
+
+  corpus Corpus @relation(fields: [corpusId], references: [id], onDelete: Cascade)
+
+  @@map("document_ingestion_pipelines")
 }
 
 // =============================================================================
