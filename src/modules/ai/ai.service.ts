@@ -1,18 +1,22 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { AiProvider, AiMessage, AiResponse } from './ai-provider.interface';
 import { ClaudeProvider } from './providers/claude.provider';
 import { OpenAiProvider } from './providers/openai.provider';
 import { HuggingFaceProvider } from './providers/huggingface.provider';
 import { AiProvider as AiProviderEnum } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class AiService {
-  private readonly providers: Record<AiProviderEnum, AiProvider>;
+  private readonly providers: Record<string, AiProvider>;
+  private readonly logger = new Logger
 
   constructor(
     private claude: ClaudeProvider,
     private openai: OpenAiProvider,
     private huggingface: HuggingFaceProvider,
+    private config: ConfigService,
+    
   ) {
     this.providers = {
       CLAUDE: this.claude,
@@ -26,6 +30,7 @@ export class AiService {
     messages: AiMessage[],
     systemPrompt?: string,
   ): Promise<AiResponse> {
+    
     const provider = this.providers[providerName];
     if (!provider) throw new BadRequestException(`AI provider not supported: ${providerName}`);
     return provider.complete(messages, systemPrompt);
