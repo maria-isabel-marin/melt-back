@@ -93,10 +93,14 @@ export class DocumentosService {
 
     let raw: any;
     try {
-      const dataString = doc.content.toString();
+      const dataBuffer = Buffer.isBuffer(doc.content)
+        ? doc.content
+        : Buffer.from(doc.content);
+
+      const dataString = dataBuffer.toString('utf-8');
       raw = JSON.parse(dataString);
-    } catch (e) {
-      throw new Error('Failed to parse processed linguistic data.');
+    } catch (e: any) {
+      throw new Error(`Failed to parse processed linguistic data: ${e.message}`);
     }
 
     // Normalizar nombres de campo del script Python (español) → frontend (inglés)
