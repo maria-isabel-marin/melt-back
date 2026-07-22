@@ -1,4 +1,15 @@
-import { Controller, Get, Post, Delete, Param, Body, Query, UseGuards, UseInterceptors, UploadedFile } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Delete,
+  Param,
+  Body,
+  Query,
+  UseGuards,
+  UseInterceptors,
+  UploadedFile,
+} from '@nestjs/common';
 import { DocumentosService } from './documentos.service';
 import { IngestionService } from './ingestion.service';
 import { IngestDocumentoDto } from './dto/ingest-documento.dto';
@@ -12,7 +23,10 @@ import { FileInterceptor } from '@nestjs/platform-express';
 @Controller('documentos')
 @UseGuards(JwtAuthGuard)
 export class DocumentosController {
-  constructor(private service: DocumentosService, private ingestionService: IngestionService)   {}
+  constructor(
+    private service: DocumentosService,
+    private ingestionService: IngestionService,
+  ) {}
 
   @Get()
   findAll(@Query('corpusId') corpusId: string, @CurrentUser() user: JwtPayload) {
@@ -35,14 +49,31 @@ export class DocumentosController {
     @Body('language') language?: Language,
     @Body('documentType') documentType?: DocumentType,
     @Body('description') description?: string,
-    
-    
+    @Body('pageCount') pageCount?: string,
   ) {
-    return this.ingestionService.ingestFile(
+    return this.ingestionService.uploadFileOnly(
       file,
-      { corpusId, title, author, language, documentType, description },
+      {
+        corpusId,
+        title,
+        author,
+        language,
+        documentType,
+        description,
+        pageCount: pageCount ? Number(pageCount) : undefined,
+      },
       user.sub,
     );
+  }
+
+  @Post(':id/level0/process')
+  processLevel0(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.ingestionService.processLevel0(id, user.sub);
+  }
+
+  @Get(':id/level0/progress')
+  getLevel0Progress(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.ingestionService.getLevel0Progress(id, user.sub);
   }
 
   @Get(':id/level0')
@@ -74,4 +105,3 @@ export class DocumentosController {
     return this.service.initializeAnalisis(id, user.sub, aiProvider);
   }
 }
-
