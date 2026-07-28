@@ -28,6 +28,7 @@ import time
 import unicodedata
 import warnings
 from collections import Counter
+from statistics import median
 
 warnings.filterwarnings("ignore")
 
@@ -162,6 +163,346 @@ FRONT_MATTER_KEYWORDS = [
 
 def normalize_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
+
+SOFT_HYPHEN = "\u00ad"
+LETTER_CHARS = "A-Za-zÁÉÍÓÚÜÑáéíóúüñ"
+LOWERCASE_CHARS = "a-záéíóúüñ"
+LINE_BREAK_HYPHENS = r"\-‐-‒–—"
+
+
+def repair_pdf_hyphenation(text: str) -> str:
+
+    if not text:
+        return ""
+
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = text.replace("\u00a0", " ")
+    text = text.replace("\u200b", "")
+
+    # Palabra cortada con guion suave y salto de línea:
+    # enton­\nces -> entonces
+    text = re.sub(
+        rf"([{LETTER_CHARS}]){SOFT_HYPHEN}[ \t]*\n[ \t]*([{LOWERCASE_CHARS}])",
+        r"\1\2",
+        text,
+    )
+
+    # Palabra cortada con guion visible y salto de línea:
+    # considera-\ndo -> considerado
+    text = re.sub(
+        rf"([{LETTER_CHARS}])[{LINE_BREAK_HYPHENS}][ \t]*\n[ \t]*([{LOWERCASE_CHARS}])",
+        r"\1\2",
+        text,
+    )
+
+    # Guion suave dentro de una misma línea:
+    # pe­ lícula -> película
+    text = re.sub(
+        rf"([{LETTER_CHARS}]){SOFT_HYPHEN}[ \t]*([{LETTER_CHARS}])",
+        r"\1\2",
+        text,
+    )
+
+    # Eliminar cualquier guion suave restante.
+    text = text.replace(SOFT_HYPHEN, "")
+
+    return text
+
+FOOTNOTE_MARKER_PATTERN = re.compile(
+    r"^\s*(?:\d{1,3}|[*†‡§])(?:[\s.)\]]+|$)"
+)
+
+
+def extract_page_lines_with_layout(page) -> list:
+    """
+    Extrae las líneas de una página conservando posición y tamaño de fuente.
+    """
+    lines = []
+
+    try:
+        blocks = page.get_text(
+            "dict",
+            flags=0,
+        ).get("blocks", [])
+    except Exception:
+        return lines
+
+    for block in blocks:
+        if "lines" not in block:
+            continue
+
+        for line in block["lines"]:
+            spans = line.get("spans", [])
+            if not spans:
+                continue
+
+            text = normalize_whitespace(
+                " ".join(span.get("text", "") for span in spans)
+            )
+
+            if not text:
+                continue
+
+            sizes = [
+                float(span.get("size", 0))
+                for span in spans
+                if float(span.get("size", 0)) > 0
+            ]
+
+            if not sizes:
+                continue
+
+            bbox = line.get("bbox")
+
+            if not bbox or len(bbox) < 4:
+                span_boxes = [
+                    span.get("bbox")
+                    for span in spans
+                    if span.get("bbox") and len(span.get("bbox")) >= 4
+                ]
+
+                if not span_boxes:
+                    continue
+
+                x0 = min(box[0] for box in span_boxes)
+                y0 = min(box[1] for box in span_boxes)
+                x1 = max(box[2] for box in span_boxes)
+                y1 = max(box[3] for box in span_boxes)
+            else:
+                x0, y0, x1, y1 = bbox
+
+            lines.append({
+                "text": repair_pdf_hyphenation(text),
+                "size": median(sizes),
+                "min_size": min(sizes),
+                "max_size": max(sizes),
+                "x0": float(x0),
+                "y0": float(y0),
+                "x1": float(x1),
+                "y1": float(y1),
+            })
+
+    return sorted(lines, key=lambda item: (item["y0"], item["x0"]))
+
+
+def estimate_body_font_size(lines: list) -> float:
+
+    candidates = [
+        line["size"]
+        for line in lines
+        if len(line["text"]) >= 35
+        and not re.fullmatch(r"\d{1,4}", line["text"])
+    ]
+
+    if not candidates:
+        candidates = [
+            line["size"]
+            for line in lines
+            if not re.fullmatch(r"\d{1,4}", line["text"])
+        ]
+
+    return float(median(candidates)) if candidates else 0.0
+
+
+def is_probable_footnote_line(
+    line: dict,
+    page_height: float,
+    body_font_size: float,
+) -> bool:
+
+    text = normalize_whitespace(line.get("text", ""))
+
+    if not text:
+        return False
+
+    # Evitar confundir el número de página con una nota.
+    if re.fullmatch(r"\d{1,4}", text):
+        return False
+
+    if page_height <= 0 or body_font_size <= 0:
+        return False
+
+    vertical_ratio = line["y0"] / page_height
+    smaller_font = line["size"] <= body_font_size * 0.92
+    clearly_smaller_font = line["size"] <= body_font_size * 0.82
+    has_marker = bool(FOOTNOTE_MARKER_PATTERN.match(text))
+
+    # Debe estar en la zona inferior de la página.
+    in_bottom_zone = vertical_ratio >= 0.64
+    in_deep_bottom_zone = vertical_ratio >= 0.72
+
+    # Con marcador aceptamos una diferencia de fuente menos fuerte.
+    if has_marker and in_bottom_zone and smaller_font:
+        return True
+
+    # Una continuación sin número debe estar claramente abajo
+    # y usar una fuente sensiblemente menor.
+    if in_deep_bottom_zone and clearly_smaller_font:
+        return True
+
+    return False
+
+
+def group_footnote_lines(candidate_lines: list) -> list[str]:
+
+    notes = []
+    current = ""
+
+    for line in candidate_lines:
+        text = normalize_whitespace(line.get("text", ""))
+
+        if not text:
+            continue
+
+        starts_note = bool(FOOTNOTE_MARKER_PATTERN.match(text))
+
+        if starts_note:
+            if current:
+                notes.append(normalize_whitespace(current))
+            current = text
+        elif current:
+            current = f"{current} {text}"
+
+    if current:
+        notes.append(normalize_whitespace(current))
+
+    return [
+        note
+        for note in notes
+        if len(note) >= 15
+    ]
+
+
+def remove_layout_footnote_lines(
+    page_text: str,
+    candidate_lines: list,
+) -> str:
+
+    candidate_counts = Counter(
+        normalize_for_match(line["text"])
+        for line in candidate_lines
+        if normalize_for_match(line["text"])
+    )
+
+    remaining_lines = []
+
+    for raw_line in page_text.splitlines():
+        normalized = normalize_for_match(raw_line)
+
+        if normalized and candidate_counts.get(normalized, 0) > 0:
+            candidate_counts[normalized] -= 1
+            continue
+
+        remaining_lines.append(raw_line)
+
+    return "\n".join(remaining_lines)
+
+
+def extract_footnotes_from_page_layout(page, page_text: str):
+
+    lines = extract_page_lines_with_layout(page)
+
+    if not lines:
+        return page_text, [], {
+            "body_font_size": None,
+            "candidate_lines": 0,
+        }
+
+    page_height = float(page.rect.height)
+    body_font_size = estimate_body_font_size(lines)
+
+    candidate_lines = [
+        line
+        for line in lines
+        if is_probable_footnote_line(
+            line,
+            page_height,
+            body_font_size,
+        )
+    ]
+
+    notes = group_footnote_lines(candidate_lines)
+
+    if not notes:
+        return page_text, [], {
+            "body_font_size": body_font_size,
+            "candidate_lines": len(candidate_lines),
+        }
+
+    text_without_notes = remove_layout_footnote_lines(
+        page_text,
+        candidate_lines,
+    )
+
+    return text_without_notes, notes, {
+        "body_font_size": body_font_size,
+        "candidate_lines": len(candidate_lines),
+    }
+
+def is_probable_short_noise(line: str, min_line_length: int) -> bool:
+
+    if not line:
+        return True
+
+    if len(line) >= min_line_length:
+        return False
+
+    # Números de página o líneas formadas únicamente por símbolos.
+    if re.fullmatch(r"\d{1,4}", line):
+        return True
+
+    if re.fullmatch(r"[\W_]+", line):
+        return True
+
+    letters = re.findall(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]", line)
+    if not letters:
+        return True
+
+    words = line.split()
+    upper_ratio = sum(1 for char in letters if char.isupper()) / len(letters)
+
+    # Encabezado corto completamente en mayúsculas.
+    if upper_ratio >= 0.85 and len(words) <= 8:
+        return True
+
+    return False
+
+
+def rebuild_wrapped_lines(lines: list[str]) -> str:
+
+    paragraphs = []
+    current = ""
+
+    for raw_line in lines:
+        line = normalize_whitespace(raw_line)
+        if not line:
+            continue
+
+        if not current:
+            current = line
+            continue
+
+        current_ends_sentence = bool(
+            re.search(r"""[.!?…]["'»”)]?$""", current)
+        )
+
+        line_starts_list = bool(
+            re.match(
+                r"^(?:[-–—•▪◦]\s+|\d{1,3}[.)]\s+|[A-Za-z][.)]\s+)",
+                line,
+            )
+        )
+
+        if current_ends_sentence or line_starts_list:
+            paragraphs.append(current)
+            current = line
+        else:
+            current = f"{current} {line}"
+
+    if current:
+        paragraphs.append(current)
+
+    return "\n".join(paragraphs)
 
 
 def strip_accents(text: str) -> str:
@@ -848,17 +1189,47 @@ def extract_text_from_pdf(pdf_path: str) -> list:
     pages = []
 
     _err("")
-    for page_num in range(total):
-        _progress_bar(page_num + 1, total, label="páginas extraídas")
-        page = doc[page_num]
-        text = page.get_text("text")
-        text = re.sub(r"\n{3,}", "\n\n", text)
-        text = re.sub(r"[ \t]{2,}", " ", text)
 
-        if text.strip():
+    for page_num in range(total):
+        _progress_bar(
+            page_num + 1,
+            total,
+            label="páginas extraídas",
+        )
+
+        page = doc[page_num]
+        raw_text = page.get_text("text")
+
+        raw_text = repair_pdf_hyphenation(raw_text)
+        raw_text = re.sub(r"\n{3,}", "\n\n", raw_text)
+        raw_text = re.sub(r"[ \t]{2,}", " ", raw_text)
+
+        text_without_footnotes, footnotes, footnote_debug = (
+            extract_footnotes_from_page_layout(
+                page,
+                raw_text,
+            )
+        )
+
+        text_without_footnotes = repair_pdf_hyphenation(
+            text_without_footnotes
+        )
+
+        if raw_text.strip():
             pages.append({
                 "pagina": page_num + 1,
-                "texto": text.strip(),
+
+                # Texto sin notas para limpieza y NLP.
+                "texto": text_without_footnotes.strip(),
+
+                # Texto original por si después necesitamos inspección.
+                "texto_original": raw_text.strip(),
+
+                # Notas detectadas mediante posición y fuente.
+                "footnotes": footnotes,
+
+                # Datos útiles para depurar el algoritmo.
+                "footnote_debug": footnote_debug,
             })
 
     doc.close()
@@ -894,33 +1265,48 @@ def detect_repeated_headers(pages_text: list, threshold: float = 0.3) -> set:
     return {line for line, count in line_counts.items() if count >= n_pages * threshold}
 
 
-def clean_page_text(text: str, headers_set: set, regex_patterns: list, min_line_length: int) -> str:
+def clean_page_text(
+    text: str,
+    headers_set: set,
+    regex_patterns: list,
+    min_line_length: int,
+) -> str:
+
+    text = repair_pdf_hyphenation(text)
+
     lines = text.split("\n")
     cleaned = []
-    headers_upper = {normalize_whitespace(h).upper() for h in headers_set}
+
+    headers_normalized = {
+        normalize_for_match(header)
+        for header in headers_set
+        if normalize_whitespace(header)
+    }
 
     for line in lines:
         stripped = normalize_whitespace(line)
+
         if not stripped:
             continue
 
-        if stripped.upper() in headers_upper:
+        # Encabezados conocidos o repetidos.
+        if normalize_for_match(stripped) in headers_normalized:
             continue
 
-        skip = False
-        for pattern in regex_patterns:
-            if re.match(pattern, stripped, re.IGNORECASE):
-                skip = True
-                break
-        if skip:
+        # Patrones explícitos: números de página, índices, figuras, etc.
+        if any(
+            re.match(pattern, stripped, re.IGNORECASE)
+            for pattern in regex_patterns
+        ):
             continue
 
-        if 0 < len(stripped) < min_line_length and not stripped[0].islower():
+        # Solo descartar líneas cortas cuando realmente parecen ruido.
+        if is_probable_short_noise(stripped, min_line_length):
             continue
 
         cleaned.append(stripped)
 
-    return "\n".join(cleaned)
+    return rebuild_wrapped_lines(cleaned)
 
 
 def remove_footnotes_from_bottom(text: str):
@@ -1201,13 +1587,27 @@ def main():
             chapter = chapter_map.get(page_num, fallback_chapter) if chapter_map else fallback_chapter
             chapter = clean_chapter_name(chapter) or fallback_chapter
 
-        text_no_fn, page_footnotes = remove_footnotes_from_bottom(page["texto"])
+        page_footnotes = page.get("footnotes", [])
+        text_no_fn = page["texto"]
+
+        # Fallback para TXT o páginas donde la extracción visual no encontró nada.
+        if not page_footnotes:
+            text_no_fn, fallback_footnotes = remove_footnotes_from_bottom(
+                page["texto"]
+            )
+            page_footnotes = fallback_footnotes
+
         for fn in page_footnotes:
+            normalized_note = normalize_whitespace(fn)
+
+            if not normalized_note:
+                continue
+
             all_footnotes.append({
                 "archivo": filename,
                 "pagina": page_num,
                 "capitulo": chapter,
-                "nota_al_pie": fn,
+                "nota_al_pie": normalized_note,
             })
 
         clean_text = clean_page_text(
@@ -1241,6 +1641,25 @@ def main():
     _bullet(f"Caracteres después:        {cleaned_char_count:,}")
     _bullet(f"Reducción:                 {reduction_pct:.1f}%")
     _bullet(f"Notas al pie extraídas:    {len(all_footnotes):,}")
+    pages_with_detected_footnotes = sum(
+        1
+        for page in raw_pages
+        if page.get("footnotes")
+    )
+
+    layout_candidate_lines = sum(
+        page.get("footnote_debug", {}).get("candidate_lines", 0)
+        for page in raw_pages
+    )
+
+    _bullet(
+        f"Páginas con notas:         "
+        f"{pages_with_detected_footnotes:,}"
+    )
+    _bullet(
+        f"Líneas candidatas:         "
+        f"{layout_candidate_lines:,}"
+    )
     _bullet(f"Tiempo:                    {time.time() - t_step:.1f}s")
 
     # ─────────────────────────────────────────────────────────────────────
