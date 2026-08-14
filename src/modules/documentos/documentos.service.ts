@@ -1,7 +1,11 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateDocumentoDto } from './dto/create-documento.dto';
-import { AiProvider } from '@prisma/client';
+import { AiProvider, Prisma } from '@prisma/client';
+import {
+  normalizeDocumentLevel0Overrides,
+  resolveLevel0Config,
+} from '../../common/level0-config';
 
 @Injectable()
 export class DocumentosService {
@@ -84,6 +88,80 @@ export class DocumentosService {
         documentId,
         aiProvider,
       },
+    });
+  }
+
+  async getLevel0Config(documentId: string, userId: string) {
+    const doc = await this.findOne(documentId, userId);
+
+    const overrides =
+      doc.level0ConfigOverrides === null
+        ? null
+        : normalizeDocumentLevel0Overrides(doc.level0ConfigOverrides);
+
+    return {
+      corpusConfig: resolveLevel0Config(doc.corpus.level0Config, null),
+      overrides,
+      effectiveConfig: resolveLevel0Config(
+        doc.corpus.level0Config,
+        doc.level0ConfigOverrides,
+      ),
+      source: doc.level0ConfigOverrides === null ? 'CORPUS' : 'DOCUMENT',
+    };
+  }
+
+  async updateLevel0Config(
+    documentId: string,
+    userId: string,
+    overrides: unknown,
+  ) {
+    const doc = await this.findOne(documentId, userId);
+
+    if (doc.analysis?.level0Status === 'PROCESSING') {
+      throw new BadRequestException(
+        'Level 0 configuration cannot be changed while this document is processing.',
+      );
+    }
+
+    const normalized =
+      overrides === null
+        ? null
+        : normalizeDocumentLevel0Overrides(overrides);
+
+    await this.prisma.document.update({
+      where: { id: documentId },
+      data: {
+        level0ConfigOverrides:
+          normalized === null ? Prisma.DbNull : (normalized as any),
+      },
+    });
+
+    await this.invalidateDocumentAnalysis(documentId);
+
+    return this.getLevel0Config(documentId, userId);
+  }
+
+  private async invalidateDocumentAnalysis(documentId: string) {
+    const analysis = await this.prisma.documentAnalysis.findUnique({
+      where: { documentId },
+    });
+
+    if (!analysis) return;
+
+    const data: Prisma.DocumentAnalysisUpdateInput = {};
+
+    if (analysis.level0Status !== 'PENDING') data.level0Status = 'OUTDATED';
+    if (analysis.level1Status !== 'PENDING') data.level1Status = 'OUTDATED';
+    if (analysis.level2Status !== 'PENDING') data.level2Status = 'OUTDATED';
+    if (analysis.level3Status !== 'PENDING') data.level3Status = 'OUTDATED';
+    if (analysis.level4Status !== 'PENDING') data.level4Status = 'OUTDATED';
+    if (analysis.level5Status !== 'PENDING') data.level5Status = 'OUTDATED';
+
+    if (Object.keys(data).length === 0) return;
+
+    await this.prisma.documentAnalysis.update({
+      where: { documentId },
+      data,
     });
   }
 
@@ -462,6 +540,7 @@ export class DocumentosService {
       footnote_count: raw.footnote_count,
 
       chapter_detection_method: raw.chapter_detection_method,
+      level0_config: raw.level0_config,
       chapter_detection: chapterDetection,
       cleaning_summary: cleaningSummary,
       footnotes_summary: footnotesSummary,
