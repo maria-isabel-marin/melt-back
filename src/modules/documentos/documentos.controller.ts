@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Put,
   Delete,
   Param,
   Body,
@@ -74,6 +75,20 @@ export class DocumentosController {
   @Get(':id/level0/progress')
   getLevel0Progress(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.ingestionService.getLevel0Progress(id, user.sub);
+  }
+
+  @Get(':id/level0/config')
+  getLevel0Config(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.service.getLevel0Config(id, user.sub);
+  }
+
+  @Put(':id/level0/config')
+  updateLevel0Config(
+    @Param('id') id: string,
+    @Body('overrides') overrides: unknown,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.service.updateLevel0Config(id, user.sub, overrides);
   }
 
   @Get(':id/level0')

@@ -105,6 +105,146 @@ PAGES_TO_EXCLUDE = {
 MIN_LINE_LENGTH = 30
 BATCH_SIZE_NLP = 500
 
+DEFAULT_LEVEL0_CONFIG = {
+    "chapterDetection": {
+        "enabled": True,
+        "method": "AUTO",
+    },
+    "cleaning": {
+        "repairHyphenation": True,
+        "detectRepeatedHeaders": True,
+        "repeatedHeaderThreshold": 0.3,
+        "excludeFrontMatter": True,
+        "minLineLength": 30,
+        "additionalHeadersFooters": [],
+    },
+    "footnotes": {
+        "extract": True,
+    },
+    "segmentation": {
+        "minChars": 10,
+        "maxChars": 2000,
+    },
+    # None keeps the current filename-specific legacy exclusions.
+    # [] explicitly disables them.
+    "excludedPageRanges": None,
+}
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    result = dict(base)
+
+    for key, value in (override or {}).items():
+        if (
+            key in result
+            and isinstance(result[key], dict)
+            and isinstance(value, dict)
+        ):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+
+    return result
+
+
+def load_level0_config(raw_json: str) -> dict:
+    config = json.loads(json.dumps(DEFAULT_LEVEL0_CONFIG))
+
+    if not raw_json:
+        return config
+
+    try:
+        incoming = json.loads(raw_json)
+    except Exception as exc:
+        _warn(f"Configuración N0 inválida; se usarán valores por defecto: {exc}")
+        return config
+
+    if not isinstance(incoming, dict):
+        _warn("Configuración N0 inválida; se usarán valores por defecto.")
+        return config
+
+    config = _deep_merge(config, incoming)
+
+    # Normalización defensiva.
+    chapter = config.setdefault("chapterDetection", {})
+    chapter["enabled"] = bool(chapter.get("enabled", True))
+    method = str(chapter.get("method", "AUTO")).upper()
+    if method not in {"AUTO", "TOC", "PRINTED_INDEX", "FONT_SIZE", "NONE"}:
+        method = "AUTO"
+    chapter["method"] = method
+
+    cleaning = config.setdefault("cleaning", {})
+    cleaning["repairHyphenation"] = bool(
+        cleaning.get("repairHyphenation", True)
+    )
+    cleaning["detectRepeatedHeaders"] = bool(
+        cleaning.get("detectRepeatedHeaders", True)
+    )
+    cleaning["excludeFrontMatter"] = bool(
+        cleaning.get("excludeFrontMatter", True)
+    )
+
+    try:
+        threshold = float(cleaning.get("repeatedHeaderThreshold", 0.3))
+    except Exception:
+        threshold = 0.3
+    cleaning["repeatedHeaderThreshold"] = min(0.95, max(0.05, threshold))
+
+    try:
+        min_line_length = int(cleaning.get("minLineLength", 30))
+    except Exception:
+        min_line_length = 30
+    cleaning["minLineLength"] = min(500, max(0, min_line_length))
+
+    headers = cleaning.get("additionalHeadersFooters", [])
+    if not isinstance(headers, list):
+        headers = []
+    cleaning["additionalHeadersFooters"] = [
+        normalize_whitespace(str(item))[:250]
+        for item in headers
+        if normalize_whitespace(str(item))
+    ][:250]
+
+    footnotes = config.setdefault("footnotes", {})
+    footnotes["extract"] = bool(footnotes.get("extract", True))
+
+    segmentation = config.setdefault("segmentation", {})
+    try:
+        min_chars = int(segmentation.get("minChars", 10))
+    except Exception:
+        min_chars = 10
+
+    try:
+        max_chars = int(segmentation.get("maxChars", 2000))
+    except Exception:
+        max_chars = 2000
+
+    min_chars = min(5000, max(1, min_chars))
+    max_chars = min(20000, max(min_chars, max_chars))
+    segmentation["minChars"] = min_chars
+    segmentation["maxChars"] = max_chars
+
+    ranges = config.get("excludedPageRanges", None)
+    if ranges is not None:
+        normalized_ranges = []
+
+        if isinstance(ranges, list):
+            for item in ranges[:250]:
+                if not isinstance(item, (list, tuple)) or len(item) != 2:
+                    continue
+                try:
+                    start = max(1, int(item[0]))
+                    end = max(1, int(item[1]))
+                except Exception:
+                    continue
+                if start > end:
+                    start, end = end, start
+                normalized_ranges.append([start, end])
+
+        config["excludedPageRanges"] = normalized_ranges
+
+    return config
+
 REGEX_PATTERNS_TO_REMOVE = [
     r"^\d{1,4}$",
     r"^\d{1,4}\s*$",
@@ -1181,12 +1321,15 @@ def get_chapter_map_from_fonts(pdf_path: str, top_percentile: float = 0.01):
     return chapter_map if chapter_map else None
 
 
-def extract_text_from_pdf(pdf_path: str) -> list:
+def extract_text_from_pdf(pdf_path: str, level0_config: dict) -> list:
     import fitz
 
     doc = fitz.open(pdf_path)
     total = len(doc)
     pages = []
+
+    cleaning_cfg = level0_config["cleaning"]
+    footnote_cfg = level0_config["footnotes"]
 
     _err("")
 
@@ -1200,20 +1343,31 @@ def extract_text_from_pdf(pdf_path: str) -> list:
         page = doc[page_num]
         raw_text = page.get_text("text")
 
-        raw_text = repair_pdf_hyphenation(raw_text)
+        if cleaning_cfg["repairHyphenation"]:
+            raw_text = repair_pdf_hyphenation(raw_text)
+
         raw_text = re.sub(r"\n{3,}", "\n\n", raw_text)
         raw_text = re.sub(r"[ \t]{2,}", " ", raw_text)
 
-        text_without_footnotes, footnotes, footnote_debug = (
-            extract_footnotes_from_page_layout(
-                page,
-                raw_text,
+        if footnote_cfg["extract"]:
+            text_without_footnotes, footnotes, footnote_debug = (
+                extract_footnotes_from_page_layout(
+                    page,
+                    raw_text,
+                )
             )
-        )
+        else:
+            text_without_footnotes = raw_text
+            footnotes = []
+            footnote_debug = {
+                "body_font_size": None,
+                "candidate_lines": 0,
+            }
 
-        text_without_footnotes = repair_pdf_hyphenation(
-            text_without_footnotes
-        )
+        if cleaning_cfg["repairHyphenation"]:
+            text_without_footnotes = repair_pdf_hyphenation(
+                text_without_footnotes
+            )
 
         if raw_text.strip():
             pages.append({
@@ -1234,7 +1388,6 @@ def extract_text_from_pdf(pdf_path: str) -> list:
 
     doc.close()
     return pages
-
 
 def extract_text_from_txt(txt_path: str) -> list:
     with open(txt_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -1270,9 +1423,11 @@ def clean_page_text(
     headers_set: set,
     regex_patterns: list,
     min_line_length: int,
+    repair_hyphenation: bool = True,
 ) -> str:
 
-    text = repair_pdf_hyphenation(text)
+    if repair_hyphenation:
+        text = repair_pdf_hyphenation(text)
 
     lines = text.split("\n")
     cleaned = []
@@ -1397,7 +1552,14 @@ def main():
     parser.add_argument("--author", default="Comisión de la Verdad", help="Autor del documento")
     parser.add_argument("--language", default="SPANISH", choices=["SPANISH", "ENGLISH"])
     parser.add_argument("--inspect-pages", type=int, default=3)
+    parser.add_argument(
+        "--config-json",
+        default="",
+        help="Configuración efectiva de Nivel 0 serializada como JSON",
+    )
     args = parser.parse_args()
+
+    level0_config = load_level0_config(args.config_json)
 
     t_global_start = time.time()
 
@@ -1413,6 +1575,7 @@ def main():
     _err(f"  Archivo   : {filename}")
     _err(f"  Título    : {args.title or '(auto)'}")
     _err(f"  Idioma    : {args.language}")
+    _err(f"  Config N0 : {json.dumps(level0_config, ensure_ascii=False)}")
     _err(f"  Inicio    : {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     _step("Cargando modelo spaCy…")
@@ -1443,63 +1606,120 @@ def main():
     index_chapters_summary = None
     printed_index_offset = 0
 
+    chapter_cfg = level0_config["chapterDetection"]
+    requested_chapter_method = chapter_cfg["method"]
+
     if file_ext == ".pdf":
-        _step("Extrayendo texto + capítulos…")
-        raw_pages = extract_text_from_pdf(file_path)
+        _step("Extrayendo texto…")
+        raw_pages = extract_text_from_pdf(file_path, level0_config)
         _ok(f"Texto extraído: {len(raw_pages):,} páginas con texto")
         _bullet(f"Tiempo extracción: {time.time() - t_step:.1f}s")
 
-        _step("Intentando detección de capítulos por TOC/Bookmarks…")
-        chapter_map = get_chapter_map_from_toc(file_path)
-
-        if chapter_map:
-            chapter_method = "toc_bookmarks"
-            unique_chapters = sorted(
-                set(chapter_map.values()),
-                key=lambda x: min(p for p, c in chapter_map.items() if c == x),
-            )
-            _ok(f"{len(unique_chapters)} capítulos detectados vía TOC/Bookmarks")
-            for ch in unique_chapters[:12]:
-                pages_range = sorted(p for p, c in chapter_map.items() if c == ch)
-                _bullet(f"pp. {pages_range[0]}-{pages_range[-1]}: {ch}")
-            if len(unique_chapters) > 12:
-                _bullet(f"… y {len(unique_chapters) - 12} más")
-
+        if not chapter_cfg["enabled"] or requested_chapter_method == "NONE":
+            chapter_method = "fallback_filename"
+            _warn("Detección de capítulos desactivada por configuración.")
         else:
-            _warn("Sin TOC. Intentando detección desde índice impreso…")
-            chapter_map, index_chapters_summary, printed_index_offset = get_chapter_map_from_index_pages(
-                file_path,
-                raw_pages=raw_pages,
-            )
-
-            if chapter_map:
-                chapter_method = "printed_index"
-                _ok(f"{len(index_chapters_summary)} capítulos detectados vía índice impreso")
-                _bullet(f"Offset inferido automáticamente: {printed_index_offset:+d}")
-                for ch in index_chapters_summary:
-                    _bullet(f"pp. {ch['start_page']}-{ch['end_page']}: {ch['name']}")
-                if len(index_chapters_summary) > 12:
-                    _bullet(f"… y {len(index_chapters_summary) - 12} más")
-
-            else:
-                _warn("Sin índice utilizable. Intentando detección tipográfica…")
-                chapter_map = get_chapter_map_from_fonts(file_path, top_percentile=0.01)
+            if requested_chapter_method in {"AUTO", "TOC"}:
+                _step("Intentando detección de capítulos por TOC/Bookmarks…")
+                chapter_map = get_chapter_map_from_toc(file_path)
 
                 if chapter_map:
-                    chapter_method = "font_size"
+                    chapter_method = "toc_bookmarks"
                     unique_chapters = sorted(
                         set(chapter_map.values()),
                         key=lambda x: min(p for p, c in chapter_map.items() if c == x),
                     )
-                    _ok(f"{len(unique_chapters)} capítulos detectados vía tamaño de fuente")
+                    _ok(f"{len(unique_chapters)} capítulos detectados vía TOC/Bookmarks")
                     for ch in unique_chapters[:12]:
                         pages_range = sorted(p for p, c in chapter_map.items() if c == ch)
                         _bullet(f"pp. {pages_range[0]}-{pages_range[-1]}: {ch}")
                     if len(unique_chapters) > 12:
                         _bullet(f"… y {len(unique_chapters) - 12} más")
+
+            if (
+                chapter_map is None
+                and requested_chapter_method in {"AUTO", "PRINTED_INDEX"}
+            ):
+                if requested_chapter_method == "AUTO":
+                    _warn("Sin TOC. Intentando detección desde índice impreso…")
                 else:
-                    chapter_method = "fallback_filename"
-                    _warn("Sin TOC, sin índice y sin capítulos tipográficos confiables → fallback al título/archivo")
+                    _step("Detectando capítulos desde índice impreso…")
+
+                (
+                    chapter_map,
+                    index_chapters_summary,
+                    printed_index_offset,
+                ) = get_chapter_map_from_index_pages(
+                    file_path,
+                    raw_pages=raw_pages,
+                )
+
+                if chapter_map:
+                    chapter_method = "printed_index"
+                    _ok(
+                        f"{len(index_chapters_summary)} capítulos "
+                        "detectados vía índice impreso"
+                    )
+                    _bullet(
+                        "Offset inferido automáticamente: "
+                        f"{printed_index_offset:+d}"
+                    )
+                    for ch in index_chapters_summary:
+                        _bullet(
+                            f"pp. {ch['start_page']}-{ch['end_page']}: "
+                            f"{ch['name']}"
+                        )
+                    if len(index_chapters_summary) > 12:
+                        _bullet(
+                            f"… y {len(index_chapters_summary) - 12} más"
+                        )
+
+            if (
+                chapter_map is None
+                and requested_chapter_method in {"AUTO", "FONT_SIZE"}
+            ):
+                if requested_chapter_method == "AUTO":
+                    _warn(
+                        "Sin índice utilizable. Intentando detección tipográfica…"
+                    )
+                else:
+                    _step("Detectando capítulos por tamaño de fuente…")
+
+                chapter_map = get_chapter_map_from_fonts(
+                    file_path,
+                    top_percentile=0.01,
+                )
+
+                if chapter_map:
+                    chapter_method = "font_size"
+                    unique_chapters = sorted(
+                        set(chapter_map.values()),
+                        key=lambda x: min(
+                            p for p, c in chapter_map.items() if c == x
+                        ),
+                    )
+                    _ok(
+                        f"{len(unique_chapters)} capítulos detectados "
+                        "vía tamaño de fuente"
+                    )
+                    for ch in unique_chapters[:12]:
+                        pages_range = sorted(
+                            p for p, c in chapter_map.items() if c == ch
+                        )
+                        _bullet(
+                            f"pp. {pages_range[0]}-{pages_range[-1]}: {ch}"
+                        )
+                    if len(unique_chapters) > 12:
+                        _bullet(
+                            f"… y {len(unique_chapters) - 12} más"
+                        )
+
+            if chapter_map is None:
+                chapter_method = "fallback_filename"
+                _warn(
+                    "No se detectaron capítulos con el método configurado "
+                    "→ fallback al título/archivo"
+                )
 
     else:
         _step("Leyendo archivo TXT…")
@@ -1519,7 +1739,15 @@ def main():
 
     _step("Detectando encabezados repetidos automáticamente…")
     pages_text_list = [p["texto"] for p in raw_pages]
-    auto_headers = detect_repeated_headers(pages_text_list, threshold=0.3)
+
+    if level0_config["cleaning"]["detectRepeatedHeaders"]:
+        auto_headers = detect_repeated_headers(
+            pages_text_list,
+            threshold=level0_config["cleaning"]["repeatedHeaderThreshold"],
+        )
+    else:
+        auto_headers = set()
+        _ok("Detección automática de encabezados desactivada.")
 
     if auto_headers:
         _ok(f"{len(auto_headers)} encabezados auto-detectados")
@@ -1541,13 +1769,37 @@ def main():
     else:
         _ok("Sin capítulos para inyectar.")
 
-    all_headers = set(HEADERS_FOOTERS) | auto_headers | chapter_name_headers
+    configured_headers = set(
+        level0_config["cleaning"]["additionalHeadersFooters"]
+    )
+    all_headers = (
+        set(HEADERS_FOOTERS)
+        | configured_headers
+        | auto_headers
+        | chapter_name_headers
+    )
 
     _step("Excluyendo páginas completas (portadas, TOC, créditos)…")
     excludes = set()
-    if filename in PAGES_TO_EXCLUDE:
+    configured_ranges = level0_config.get("excludedPageRanges")
+
+    if configured_ranges is not None:
+        excludes = expand_page_ranges(configured_ranges)
+
+        if excludes:
+            _ok(f"{len(excludes)} páginas excluidas por configuración efectiva")
+            for spec in configured_ranges:
+                if isinstance(spec, (list, tuple)):
+                    _bullet(f"Rango: pp. {spec[0]}–{spec[1]}")
+                else:
+                    _bullet(f"Página: {spec}")
+        else:
+            _ok("Exclusión manual de páginas desactivada para este documento.")
+
+    elif filename in PAGES_TO_EXCLUDE:
+        # Compatibilidad temporal con las exclusiones antiguas.
         excludes = expand_page_ranges(PAGES_TO_EXCLUDE[filename])
-        _ok(f"{len(excludes)} páginas excluidas según configuración")
+        _ok(f"{len(excludes)} páginas excluidas según configuración heredada")
         for spec in PAGES_TO_EXCLUDE[filename]:
             if isinstance(spec, (list, tuple)):
                 _bullet(f"Rango: pp. {spec[0]}–{spec[1]}")
@@ -1574,7 +1826,14 @@ def main():
 
         page_text_lower = page["texto"].lower()
 
-        if page_num <= 20 and any(keyword in page_text_lower for keyword in FRONT_MATTER_KEYWORDS):
+        if (
+            level0_config["cleaning"]["excludeFrontMatter"]
+            and page_num <= 20
+            and any(
+                keyword in page_text_lower
+                for keyword in FRONT_MATTER_KEYWORDS
+            )
+        ):
             excluded_count += 1
             continue
 
@@ -1591,7 +1850,10 @@ def main():
         text_no_fn = page["texto"]
 
         # Fallback para TXT o páginas donde la extracción visual no encontró nada.
-        if not page_footnotes:
+        if (
+            level0_config["footnotes"]["extract"]
+            and not page_footnotes
+        ):
             text_no_fn, fallback_footnotes = remove_footnotes_from_bottom(
                 page["texto"]
             )
@@ -1614,7 +1876,8 @@ def main():
             text_no_fn,
             all_headers,
             REGEX_PATTERNS_TO_REMOVE,
-            MIN_LINE_LENGTH,
+            level0_config["cleaning"]["minLineLength"],
+            repair_hyphenation=level0_config["cleaning"]["repairHyphenation"],
         )
 
         if len(clean_text.strip()) > 50:
@@ -1714,7 +1977,12 @@ def main():
     _step("Segmentando oraciones…")
     for i, page in enumerate(cleaned_pages):
         _progress_bar(i + 1, n_pages_clean, label="páginas segmentadas")
-        sentences = segment_page_into_sentences(nlp, page["text"])
+        sentences = segment_page_into_sentences(
+            nlp,
+            page["text"],
+            min_len=level0_config["segmentation"]["minChars"],
+            max_len=level0_config["segmentation"]["maxChars"],
+        )
 
         for sent_text in sentences:
             sentence_counter += 1
@@ -1897,6 +2165,7 @@ def main():
         "chars_after": cleaned_char_count,
         "chapter_detection_method": chapter_method,
         "chapter_page_offset": printed_index_offset if chapter_method == "printed_index" else 0,
+        "level0_config": level0_config,
         "pages": [
             {
                 "archivo": p["archivo"],

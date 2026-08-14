@@ -25,8 +25,21 @@ export class CorpusController {
     return this.service.create(user.sub, dto);
   }
 
+  @Put(':id/level0-config')
+  updateLevel0Config(
+    @Param('id') id: string,
+    @Body('config') config: unknown,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.service.updateLevel0Config(id, user.sub, config);
+  }
+
   @Put(':id')
-  update(@Param('id') id: string, @Body() dto: Partial<CreateCorpusDto>, @CurrentUser() user: JwtPayload) {
+  update(
+    @Param('id') id: string,
+    @Body() dto: Partial<CreateCorpusDto>,
+    @CurrentUser() user: JwtPayload,
+  ) {
     return this.service.update(id, user.sub, dto);
   }
 

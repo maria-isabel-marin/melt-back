@@ -11,6 +11,10 @@ import { Language, DocumentType } from '@prisma/client';
 import { spawn } from 'child_process';
 import { join, extname, basename } from 'path';
 import { writeFileSync, mkdirSync, existsSync } from 'fs';
+import {
+  type Level0Config,
+  resolveLevel0Config,
+} from '../../common/level0-config';
 
 type ProgressStepStatus = 'pending' | 'running' | 'done' | 'error';
 type ProgressStatus = 'PENDING' | 'PROCESSING' | 'APPROVED' | 'FAILED';
@@ -448,6 +452,11 @@ export class IngestionService {
       throw new NotFoundException('No se encontró el archivo original del documento');
     }
 
+    const level0Config = resolveLevel0Config(
+      doc.corpus.level0Config,
+      doc.level0ConfigOverrides,
+    );
+
     await this.prisma.documentAnalysis.upsert({
       where: { documentId: doc.id },
       update: { level0Status: 'PROCESSING' },
@@ -467,6 +476,7 @@ export class IngestionService {
       description: doc.description || undefined,
       pageCount: doc.pageCount || undefined,
       hadProcessedContent: !!doc.content,
+      level0Config,
     });
 
     return { started: true };
@@ -483,6 +493,7 @@ export class IngestionService {
       description?: string;
       pageCount?: number;
       hadProcessedContent: boolean;
+      level0Config: Level0Config;
     },
   ) {
     try {
@@ -493,6 +504,7 @@ export class IngestionService {
           author: metadata.author,
           language: metadata.language,
         },
+        metadata.level0Config,
         (line) => this.markProgressFromLog(documentId, line),
       );
 
@@ -803,6 +815,7 @@ export class IngestionService {
       author?: string;
       language?: Language;
     },
+    level0Config: Level0Config,
     onLog?: (line: string) => void,
   ): Promise<any> {
     return new Promise((resolve, reject) => {
@@ -825,6 +838,8 @@ export class IngestionService {
         metadata.language || 'SPANISH',
         '--inspect-pages',
         '2',
+        '--config-json',
+        JSON.stringify(level0Config),
       ];
 
       if (metadata.author) {
