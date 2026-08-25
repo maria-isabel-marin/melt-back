@@ -1,4 +1,13 @@
-import { Controller, Get, Post, Patch, Param, Body, UseGuards, ParseIntPipe } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Param,
+  Body,
+  UseGuards,
+  ParseIntPipe,
+} from '@nestjs/common';
 import { AnalisisService } from './analisis.service';
 import { Nivel1Service } from './niveles/nivel1.service';
 import { Nivel2Service } from './niveles/nivel2.service';
@@ -29,6 +38,17 @@ export class AnalisisController {
   @Get(':id/full')
   getFullAnalisis(@Param('id') id: string) {
     return this.analisis.getFullAnalisis(id);
+  }
+
+  // ── Vista previa de Nivel 1 (no consume API) ─────────────────────────────
+  @Get(':id/nivel/1/preview')
+  getNivel1Preview(@Param('id') id: string) {
+    return this.nivel1.getPreview(id);
+  }
+
+  @Get(':id/nivel/1/metadata')
+  getNivel1Metadata(@Param('id') id: string) {
+    return this.nivel1.getMetadata(id);
   }
 
   // ── Procesamiento por nivel ──────────────────────────────────────────────
@@ -83,15 +103,29 @@ export class AnalisisController {
     return this.nivel5.getResults(id);
   }
 
-  // ── Aprobación ────────────────────────────────────────────────────────────
+  // ── Aprobación ───────────────────────────────────────────────────────────
   @Post(':id/nivel/:nivel/approve')
-  approveNivel(@Param('id') id: string, @Param('nivel', ParseIntPipe) nivel: number) {
-    return this.analisis.approveNivel(id, nivel);
+  approveNivel(
+    @Param('id') id: string,
+    @Param('nivel', ParseIntPipe)
+    nivel: number,
+  ) {
+    return this.analisis.approveNivel(
+      id,
+      nivel,
+    );
   }
 
   @Post(':id/nivel/:nivel/approve-all')
-  approveAll(@Param('id') id: string, @Param('nivel', ParseIntPipe) nivel: number) {
-    return this.analisis.approveAllItems(id, nivel);
+  approveAll(
+    @Param('id') id: string,
+    @Param('nivel', ParseIntPipe)
+    nivel: number,
+  ) {
+    return this.analisis.approveAllItems(
+      id,
+      nivel,
+    );
   }
 
   // ── Estado de ítems individuales ─────────────────────────────────────────
@@ -100,8 +134,14 @@ export class AnalisisController {
     @Param('model') model: any,
     @Param('itemId') itemId: string,
     @Body('status') status: ItemStatus,
-    @Body('analystNote') analystNote?: string,
+    @Body('analystNote')
+    analystNote?: string,
   ) {
-    return this.analisis.updateItemStatus(model, itemId, status, analystNote);
+    return this.analisis.updateItemStatus(
+      model,
+      itemId,
+      status,
+      analystNote,
+    );
   }
 }
