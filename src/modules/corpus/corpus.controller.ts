@@ -34,6 +34,15 @@ export class CorpusController {
     return this.service.updateLevel0Config(id, user.sub, config);
   }
 
+  @Put(':id/level1-config')
+  updateLevel1Config(
+    @Param('id') id: string,
+    @Body('config') config: unknown,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.service.updateLevel1Config(id, user.sub, config);
+  }
+
   @Put(':id')
   update(
     @Param('id') id: string,

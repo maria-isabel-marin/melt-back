@@ -38,12 +38,13 @@ model Corpus {
   discursiveCommunity String?  @db.VarChar(200)
   textualGenre        String?  @db.VarChar(100)
   level0Config        Json?
+  level1Config        Json?
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
   users     UserCorpus[]
   documents Document[]
-  pipelines DocumentIngestionPipeline[]  // <--- NUEVO
+  pipelines DocumentIngestionPipeline[] // <--- NUEVO
 
   @@map("corpus")
 }
@@ -67,21 +68,22 @@ enum UserCorpusRole {
 }
 
 model Document {
-  id           String        @id @default(uuid())
-  corpusId     String
-  title        String        @db.VarChar(300)
-  description  String?
-  date         DateTime?
-  author       String?       @db.VarChar(200)
-  documentType DocumentType?
-  language     Language      @default(SPANISH)
-  content      Bytes?
-  pageCount    Int?
-  tokenCount   Int?
-  fileUrl      String?
+  id                    String        @id @default(uuid())
+  corpusId              String
+  title                 String        @db.VarChar(300)
+  description           String?
+  date                  DateTime?
+  author                String?       @db.VarChar(200)
+  documentType          DocumentType?
+  language              Language      @default(SPANISH)
+  content               Bytes?
+  pageCount             Int?
+  tokenCount            Int?
+  fileUrl               String?
   level0ConfigOverrides Json?
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  level1ConfigOverrides Json?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
 
   corpus   Corpus            @relation(fields: [corpusId], references: [id], onDelete: Cascade)
   analysis DocumentAnalysis?
@@ -116,9 +118,9 @@ model DocumentIngestionPipeline {
   corpusId    String
 
   // Configuración opcional
-  author       String?
-  language     Language?
-  documentType DocumentType?
+  author        String?
+  language      Language?
+  documentType  DocumentType?
   customOptions Json?
 
   corpus Corpus @relation(fields: [corpusId], references: [id], onDelete: Cascade)
@@ -142,15 +144,19 @@ model DocumentAnalysis {
   level4Status LevelStatus @default(PENDING)
   level5Status LevelStatus @default(PENDING)
 
+  // Metadatos de la última ejecución de Nivel 1: configuración efectiva,
+  // muestra, enfoques, modelos, tokens, tiempos y concordancia.
+  level1Metadata Json?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  document               Document               @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  primaryMetaphors       PrimaryMetaphor[]
-  conventionalMetaphors  ConventionalMetaphor[]
-  scenarios              MetaphoricalScenario[]
-  regimes                MetaphorRegime[]
-  culturalNarrative      CulturalNarrative?
+  document              Document               @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  primaryMetaphors      PrimaryMetaphor[]
+  conventionalMetaphors ConventionalMetaphor[]
+  scenarios             MetaphoricalScenario[]
+  regimes               MetaphorRegime[]
+  culturalNarrative     CulturalNarrative?
 
   @@map("document_analyses")
 }
@@ -174,29 +180,42 @@ enum AiProvider {
 // =============================================================================
 
 model PrimaryMetaphor {
-  id                   String     @id @default(uuid())
-  analysisId           String
-  page                 Int?
-  metaphoricalExpression String   @db.VarChar(500)
-  context              String?
-  focus                String?    @db.VarChar(100)
-  focusLemma           String?    @db.VarChar(100)
-  focusPartOfSpeech    String?    @db.VarChar(100)
-  contextualMeaning    String?    @db.VarChar(500)
-  basicMeaning         String?    @db.VarChar(500)
-  sourceDomain         String?    @db.VarChar(200)
-  targetDomain         String?    @db.VarChar(200)
-  conceptualMetaphor   String?    @db.VarChar(500)
-  itemStatus           ItemStatus @default(PENDING_REVIEW)
-  aiGenerated          Boolean    @default(true)
-  analystNote          String?
-  createdAt            DateTime   @default(now())
-  updatedAt            DateTime   @updatedAt
+  id         String @id @default(uuid())
+  analysisId String
 
-  analysis                DocumentAnalysis             @relation(fields: [analysisId], references: [id], onDelete: Cascade)
-  ontologicalMappings     OntologicalMapping[]
-  epistemicMappings       EpistemicMapping[]
-  conventionalMetaphors   PrimaryMetaphorConventional[]
+  // Trazabilidad exacta hacia N0.
+  sentenceId      String? @db.VarChar(200)
+  page            Int?
+  chapter         String? @db.VarChar(500)
+  context         String?
+  expandedContext String?
+
+  metaphoricalExpression String  @db.VarChar(500)
+  focus                  String? @db.VarChar(100)
+  focusLemma             String? @db.VarChar(100)
+  focusPartOfSpeech      String? @db.VarChar(100)
+  contextualMeaning      String? @db.VarChar(500)
+  basicMeaning           String? @db.VarChar(500)
+  sourceDomain           String? @db.VarChar(200)
+  targetDomain           String? @db.VarChar(200)
+  conceptualMetaphor     String? @db.VarChar(500)
+
+  // Se conserva una fila por enfoque para comparar Claude/OpenAI.
+  approach                AiProvider?
+  modelName               String?     @db.VarChar(200)
+  modelConfidence         Float?
+  crossApproachConfidence Int         @default(1)
+
+  itemStatus  ItemStatus @default(PENDING_REVIEW)
+  aiGenerated Boolean    @default(true)
+  analystNote String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  analysis              DocumentAnalysis              @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  ontologicalMappings   OntologicalMapping[]
+  epistemicMappings     EpistemicMapping[]
+  conventionalMetaphors PrimaryMetaphorConventional[]
 
   @@map("primary_metaphors")
 }
@@ -254,21 +273,21 @@ enum InferenceType {
 // =============================================================================
 
 model ConventionalMetaphor {
-  id                 String                       @id @default(uuid())
-  analysisId         String
-  conceptualMetaphor String                       @db.VarChar(500)
-  sourceDomain       String                       @db.VarChar(200)
-  targetDomain       String                       @db.VarChar(200)
-  approach           ConventionalizationApproach
-  absoluteFrequency  Int                          @default(0)
+  id                  String                        @id @default(uuid())
+  analysisId          String
+  conceptualMetaphor  String                        @db.VarChar(500)
+  sourceDomain        String                        @db.VarChar(200)
+  targetDomain        String                        @db.VarChar(200)
+  approach            ConventionalizationApproach
+  absoluteFrequency   Int                           @default(0)
   textualDistribution Json?
-  robustness         ConventionalizationRobustness
-  usageContext       String?
-  itemStatus         ItemStatus                   @default(PENDING_REVIEW)
-  aiGenerated        Boolean                      @default(true)
-  analystNote        String?
-  createdAt          DateTime                     @default(now())
-  updatedAt          DateTime                     @updatedAt
+  robustness          ConventionalizationRobustness
+  usageContext        String?
+  itemStatus          ItemStatus                    @default(PENDING_REVIEW)
+  aiGenerated         Boolean                       @default(true)
+  analystNote         String?
+  createdAt           DateTime                      @default(now())
+  updatedAt           DateTime                      @updatedAt
 
   analysis         DocumentAnalysis              @relation(fields: [analysisId], references: [id], onDelete: Cascade)
   primaryMetaphors PrimaryMetaphorConventional[]
@@ -305,21 +324,21 @@ model PrimaryMetaphorConventional {
 // =============================================================================
 
 model MetaphoricalScenario {
-  id                     String          @id @default(uuid())
+  id                     String         @id @default(uuid())
   analysisId             String
   conventionalMetaphorId String
-  scenarioName           String          @db.VarChar(200)
+  scenarioName           String         @db.VarChar(200)
   mappingIds             String[]
   status                 ScenarioStatus
   usageValuation         UsageValuation
-  itemStatus             ItemStatus      @default(PENDING_REVIEW)
-  aiGenerated            Boolean         @default(true)
+  itemStatus             ItemStatus     @default(PENDING_REVIEW)
+  aiGenerated            Boolean        @default(true)
   analystNote            String?
-  createdAt              DateTime        @default(now())
-  updatedAt              DateTime        @updatedAt
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
 
-  analysis             DocumentAnalysis      @relation(fields: [analysisId], references: [id], onDelete: Cascade)
-  conventionalMetaphor ConventionalMetaphor  @relation(fields: [conventionalMetaphorId], references: [id], onDelete: Cascade)
+  analysis             DocumentAnalysis        @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  conventionalMetaphor ConventionalMetaphor    @relation(fields: [conventionalMetaphorId], references: [id], onDelete: Cascade)
   socialGroups         PositionedSocialGroup[]
   narrativeSequence    NarrativeSequence?
   evaluativeBias       EvaluativeBias?
@@ -343,14 +362,14 @@ enum UsageValuation {
 }
 
 model PositionedSocialGroup {
-  id                  String     @id @default(uuid())
-  scenarioId          String
-  socialGroup         String     @db.VarChar(200)
-  legitimizedActions  String[]
-  itemStatus          ItemStatus @default(PENDING_REVIEW)
-  aiGenerated         Boolean    @default(true)
-  analystNote         String?
-  createdAt           DateTime   @default(now())
+  id                 String     @id @default(uuid())
+  scenarioId         String
+  socialGroup        String     @db.VarChar(200)
+  legitimizedActions String[]
+  itemStatus         ItemStatus @default(PENDING_REVIEW)
+  aiGenerated        Boolean    @default(true)
+  analystNote        String?
+  createdAt          DateTime   @default(now())
 
   scenario MetaphoricalScenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
 
@@ -358,16 +377,16 @@ model PositionedSocialGroup {
 }
 
 model NarrativeSequence {
-  id             String       @id @default(uuid())
-  scenarioId     String       @unique
-  act1Beginning  String
+  id              String       @id @default(uuid())
+  scenarioId      String       @unique
+  act1Beginning   String
   act2Development String
-  act3Resolution String
-  sequenceType   SequenceType
-  itemStatus     ItemStatus   @default(PENDING_REVIEW)
-  aiGenerated    Boolean      @default(true)
-  analystNote    String?
-  createdAt      DateTime     @default(now())
+  act3Resolution  String
+  sequenceType    SequenceType
+  itemStatus      ItemStatus   @default(PENDING_REVIEW)
+  aiGenerated     Boolean      @default(true)
+  analystNote     String?
+  createdAt       DateTime     @default(now())
 
   scenario MetaphoricalScenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
 
@@ -395,17 +414,17 @@ model EvaluativeBias {
 }
 
 model Affect {
-  id                  String     @id @default(uuid())
-  scenarioId          String
-  affectType          AffectType
-  affectName          String     @db.VarChar(200)
-  description         String?
-  socialFunction      String?
-  linguisticMarkers   String?
-  itemStatus          ItemStatus @default(PENDING_REVIEW)
-  aiGenerated         Boolean    @default(true)
-  analystNote         String?
-  createdAt           DateTime   @default(now())
+  id                String     @id @default(uuid())
+  scenarioId        String
+  affectType        AffectType
+  affectName        String     @db.VarChar(200)
+  description       String?
+  socialFunction    String?
+  linguisticMarkers String?
+  itemStatus        ItemStatus @default(PENDING_REVIEW)
+  aiGenerated       Boolean    @default(true)
+  analystNote       String?
+  createdAt         DateTime   @default(now())
 
   scenario MetaphoricalScenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
 
@@ -433,10 +452,10 @@ model MetaphorRegime {
   createdAt          DateTime   @default(now())
   updatedAt          DateTime   @updatedAt
 
-  analysis         DocumentAnalysis          @relation(fields: [analysisId], references: [id], onDelete: Cascade)
-  scenarios        ScenarioRegime[]
-  derivedMetaphors RegimeDerivedMetaphor[]
-  valueAxis        ValueAxis?
+  analysis          DocumentAnalysis        @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  scenarios         ScenarioRegime[]
+  derivedMetaphors  RegimeDerivedMetaphor[]
+  valueAxis         ValueAxis?
   culturalNarrative CulturalNarrative?
 
   @@map("metaphor_regimes")
@@ -513,11 +532,11 @@ model CulturalNarrative {
 // =============================================================================
 
 model ConsolidatedAnalysis {
-  id           String     @id @default(uuid())
-  corpusId     String
-  name         String     @db.VarChar(300)
-  documentIds  String[]
-  aiProvider   AiProvider @default(CLAUDE)
+  id          String     @id @default(uuid())
+  corpusId    String
+  name        String     @db.VarChar(300)
+  documentIds String[]
+  aiProvider  AiProvider @default(CLAUDE)
 
   level2Status LevelStatus @default(PENDING)
   level3Status LevelStatus @default(PENDING)
@@ -550,27 +569,27 @@ model ConsolidatedConventionalMetaphor {
   analystNote            String?
   createdAt              DateTime                      @default(now())
 
-  consolidatedAnalysis ConsolidatedAnalysis       @relation(fields: [consolidatedAnalysisId], references: [id], onDelete: Cascade)
+  consolidatedAnalysis ConsolidatedAnalysis   @relation(fields: [consolidatedAnalysisId], references: [id], onDelete: Cascade)
   scenarios            ConsolidatedScenario[]
 
   @@map("consolidated_conventional_metaphors")
 }
 
 model ConsolidatedScenario {
-  id                               String         @id @default(uuid())
-  consolidatedAnalysisId           String
+  id                                 String         @id @default(uuid())
+  consolidatedAnalysisId             String
   consolidatedConventionalMetaphorId String
-  scenarioName                     String         @db.VarChar(200)
-  status                           ScenarioStatus
-  usageValuation                   UsageValuation
-  itemStatus                       ItemStatus     @default(PENDING_REVIEW)
-  aiGenerated                      Boolean        @default(true)
-  analystNote                      String?
-  createdAt                        DateTime       @default(now())
+  scenarioName                       String         @db.VarChar(200)
+  status                             ScenarioStatus
+  usageValuation                     UsageValuation
+  itemStatus                         ItemStatus     @default(PENDING_REVIEW)
+  aiGenerated                        Boolean        @default(true)
+  analystNote                        String?
+  createdAt                          DateTime       @default(now())
 
-  consolidatedAnalysis  ConsolidatedAnalysis             @relation(fields: [consolidatedAnalysisId], references: [id], onDelete: Cascade)
-  conventionalMetaphor  ConsolidatedConventionalMetaphor @relation(fields: [consolidatedConventionalMetaphorId], references: [id], onDelete: Cascade)
-  regimes               ConsolidatedRegimeScenario[]
+  consolidatedAnalysis ConsolidatedAnalysis             @relation(fields: [consolidatedAnalysisId], references: [id], onDelete: Cascade)
+  conventionalMetaphor ConsolidatedConventionalMetaphor @relation(fields: [consolidatedConventionalMetaphorId], references: [id], onDelete: Cascade)
+  regimes              ConsolidatedRegimeScenario[]
 
   @@map("consolidated_scenarios")
 }

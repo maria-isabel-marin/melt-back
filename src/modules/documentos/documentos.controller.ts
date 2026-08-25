@@ -30,13 +30,25 @@ export class DocumentosController {
   ) {}
 
   @Get()
-  findAll(@Query('corpusId') corpusId: string, @CurrentUser() user: JwtPayload) {
-    return this.service.findAllByCorpus(corpusId, user.sub);
+  findAll(
+    @Query('corpusId') corpusId: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.service.findAllByCorpus(
+      corpusId,
+      user.sub,
+    );
   }
 
   @Post('ingest')
-  ingest(@Body() dto: IngestDocumentoDto, @CurrentUser() user: JwtPayload) {
-    return this.ingestionService.ingest(dto, user.sub);
+  ingest(
+    @Body() dto: IngestDocumentoDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.ingestionService.ingest(
+      dto,
+      user.sub,
+    );
   }
 
   @Post('upload')
@@ -61,25 +73,45 @@ export class DocumentosController {
         language,
         documentType,
         description,
-        pageCount: pageCount ? Number(pageCount) : undefined,
+        pageCount: pageCount
+          ? Number(pageCount)
+          : undefined,
       },
       user.sub,
     );
   }
 
   @Post(':id/level0/process')
-  processLevel0(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.ingestionService.processLevel0(id, user.sub);
+  processLevel0(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.ingestionService.processLevel0(
+      id,
+      user.sub,
+    );
   }
 
   @Get(':id/level0/progress')
-  getLevel0Progress(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.ingestionService.getLevel0Progress(id, user.sub);
+  getLevel0Progress(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.ingestionService.getLevel0Progress(
+      id,
+      user.sub,
+    );
   }
 
   @Get(':id/level0/config')
-  getLevel0Config(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.service.getLevel0Config(id, user.sub);
+  getLevel0Config(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.service.getLevel0Config(
+      id,
+      user.sub,
+    );
   }
 
   @Put(':id/level0/config')
@@ -88,27 +120,79 @@ export class DocumentosController {
     @Body('overrides') overrides: unknown,
     @CurrentUser() user: JwtPayload,
   ) {
-    return this.service.updateLevel0Config(id, user.sub, overrides);
+    return this.service.updateLevel0Config(
+      id,
+      user.sub,
+      overrides,
+    );
+  }
+
+  @Get(':id/level1/config')
+  getLevel1Config(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.service.getLevel1Config(
+      id,
+      user.sub,
+    );
+  }
+
+  @Put(':id/level1/config')
+  updateLevel1Config(
+    @Param('id') id: string,
+    @Body('overrides') overrides: unknown,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.service.updateLevel1Config(
+      id,
+      user.sub,
+      overrides,
+    );
   }
 
   @Get(':id/level0')
-  getLevel0(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.service.getLevel0Data(id, user.sub);
+  getLevel0(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.service.getLevel0Data(
+      id,
+      user.sub,
+    );
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.service.findOne(id, user.sub);
+  findOne(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.service.findOne(
+      id,
+      user.sub,
+    );
   }
 
   @Post()
-  create(@Body() dto: CreateDocumentoDto, @CurrentUser() user: JwtPayload) {
-    return this.service.create(dto, user.sub);
+  create(
+    @Body() dto: CreateDocumentoDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.service.create(
+      dto,
+      user.sub,
+    );
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.service.remove(id, user.sub);
+  remove(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.service.remove(
+      id,
+      user.sub,
+    );
   }
 
   @Post(':id/analisis')
@@ -117,6 +201,10 @@ export class DocumentosController {
     @Body('aiProvider') aiProvider: AiProvider = 'HUGGINGFACE',
     @CurrentUser() user: JwtPayload,
   ) {
-    return this.service.initializeAnalisis(id, user.sub, aiProvider);
+    return this.service.initializeAnalisis(
+      id,
+      user.sub,
+      aiProvider,
+    );
   }
 }

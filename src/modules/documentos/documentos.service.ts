@@ -6,6 +6,10 @@ import {
   normalizeDocumentLevel0Overrides,
   resolveLevel0Config,
 } from '../../common/level0-config';
+import {
+  normalizeDocumentLevel1Overrides,
+  resolveLevel1Config,
+} from '../analisis/config/level1-config';
 
 @Injectable()
 export class DocumentosService {
@@ -141,6 +145,80 @@ export class DocumentosService {
     return this.getLevel0Config(documentId, userId);
   }
 
+  async getLevel1Config(documentId: string, userId: string) {
+    const doc = await this.findOne(documentId, userId);
+
+    const overrides =
+      doc.level1ConfigOverrides === null
+        ? null
+        : normalizeDocumentLevel1Overrides(
+            doc.level1ConfigOverrides,
+          );
+
+    return {
+      corpusConfig: resolveLevel1Config(
+        doc.corpus.level1Config,
+        null,
+      ),
+      overrides,
+      effectiveConfig: resolveLevel1Config(
+        doc.corpus.level1Config,
+        doc.level1ConfigOverrides,
+      ),
+      source:
+        doc.level1ConfigOverrides === null
+          ? 'CORPUS'
+          : 'DOCUMENT',
+    };
+  }
+
+  async updateLevel1Config(
+    documentId: string,
+    userId: string,
+    overrides: unknown,
+  ) {
+    const doc = await this.findOne(documentId, userId);
+
+    const dependentLevelIsProcessing =
+      doc.analysis?.level1Status === 'PROCESSING' ||
+      doc.analysis?.level2Status === 'PROCESSING' ||
+      doc.analysis?.level3Status === 'PROCESSING' ||
+      doc.analysis?.level4Status === 'PROCESSING' ||
+      doc.analysis?.level5Status === 'PROCESSING';
+
+    if (dependentLevelIsProcessing) {
+      throw new BadRequestException(
+        'Level 1 configuration cannot be changed while Level 1 or a dependent level is processing for this document.',
+      );
+    }
+
+    const normalized =
+      overrides === null
+        ? null
+        : normalizeDocumentLevel1Overrides(
+            overrides,
+          );
+
+    await this.prisma.document.update({
+      where: { id: documentId },
+      data: {
+        level1ConfigOverrides:
+          normalized === null
+            ? Prisma.DbNull
+            : (normalized as any),
+      },
+    });
+
+    await this.invalidateDocumentAnalysisFromLevel1(
+      documentId,
+    );
+
+    return this.getLevel1Config(
+      documentId,
+      userId,
+    );
+  }
+
   private async invalidateDocumentAnalysis(documentId: string) {
     const analysis = await this.prisma.documentAnalysis.findUnique({
       where: { documentId },
@@ -158,6 +236,48 @@ export class DocumentosService {
     if (analysis.level5Status !== 'PENDING') data.level5Status = 'OUTDATED';
 
     if (Object.keys(data).length === 0) return;
+
+    await this.prisma.documentAnalysis.update({
+      where: { documentId },
+      data,
+    });
+  }
+
+  private async invalidateDocumentAnalysisFromLevel1(
+    documentId: string,
+  ) {
+    const analysis =
+      await this.prisma.documentAnalysis.findUnique({
+        where: { documentId },
+      });
+
+    if (!analysis) return;
+
+    const data: Prisma.DocumentAnalysisUpdateInput = {};
+
+    if (analysis.level1Status !== 'PENDING') {
+      data.level1Status = 'OUTDATED';
+    }
+
+    if (analysis.level2Status !== 'PENDING') {
+      data.level2Status = 'OUTDATED';
+    }
+
+    if (analysis.level3Status !== 'PENDING') {
+      data.level3Status = 'OUTDATED';
+    }
+
+    if (analysis.level4Status !== 'PENDING') {
+      data.level4Status = 'OUTDATED';
+    }
+
+    if (analysis.level5Status !== 'PENDING') {
+      data.level5Status = 'OUTDATED';
+    }
+
+    if (Object.keys(data).length === 0) {
+      return;
+    }
 
     await this.prisma.documentAnalysis.update({
       where: { documentId },
