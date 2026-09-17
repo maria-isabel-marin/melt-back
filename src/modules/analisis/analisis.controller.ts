@@ -15,6 +15,9 @@ import { Nivel3Service } from './niveles/nivel3.service';
 import { Nivel4Service } from './niveles/nivel4.service';
 import { Nivel5Service } from './niveles/nivel5.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { shouldRestrictGuestPersonalAi } from '../../common/ai-access/guest-personal-ai';
+import type { JwtPayload } from '../auth/auth.service';
 import { ItemStatus } from '@prisma/client';
 
 @Controller('analisis')
@@ -42,19 +45,43 @@ export class AnalisisController {
 
   // ── Vista previa de Nivel 1 (no consume API) ─────────────────────────────
   @Get(':id/nivel/1/preview')
-  getNivel1Preview(@Param('id') id: string) {
-    return this.nivel1.getPreview(id);
+  getNivel1Preview(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.nivel1.getPreview(
+      id,
+      user.sub,
+      shouldRestrictGuestPersonalAi(
+        user.isGuest,
+      ),
+    );
   }
 
   @Get(':id/nivel/1/metadata')
-  getNivel1Metadata(@Param('id') id: string) {
-    return this.nivel1.getMetadata(id);
+  getNivel1Metadata(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.nivel1.getMetadata(
+      id,
+      user.sub,
+    );
   }
 
   // ── Procesamiento por nivel ──────────────────────────────────────────────
   @Post(':id/nivel/1/process')
-  processNivel1(@Param('id') id: string) {
-    return this.nivel1.process(id);
+  processNivel1(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.nivel1.process(
+      id,
+      user.sub,
+      shouldRestrictGuestPersonalAi(
+        user.isGuest,
+      ),
+    );
   }
 
   @Post(':id/nivel/2/process')
@@ -79,8 +106,14 @@ export class AnalisisController {
 
   // ── Resultados por nivel ─────────────────────────────────────────────────
   @Get(':id/nivel/1')
-  getNivel1(@Param('id') id: string) {
-    return this.nivel1.getResults(id);
+  getNivel1(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.nivel1.getResults(
+      id,
+      user.sub,
+    );
   }
 
   @Get(':id/nivel/2')

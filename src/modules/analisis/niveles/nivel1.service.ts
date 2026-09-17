@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import {
   AiProvider as AiProviderEnum,
   InferenceType,
+  Level1ApiMode,
   Prisma,
 } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
@@ -17,7 +18,12 @@ import {
   AiJsonResponseException,
   AiService,
 } from '../../ai/ai.service';
-import type { AiMessage } from '../../ai/ai-provider.interface';
+import type {
+  AiCompletionOptions,
+  AiCredentialSource,
+  AiMessage,
+} from '../../ai/ai-provider.interface';
+import { AiCredentialsService } from '../../ai-credentials/ai-credentials.service';
 import {
   Level1Approach,
   Level1Config,
@@ -80,6 +86,7 @@ type NormalizedMetaphor = {
 type ApproachStats = {
   approach: Level1Approach;
   model: string | null;
+  credentialSource: AiCredentialSource;
   requests: number;
   successfulRequests: number;
   failedRequests: number;
@@ -87,6 +94,29 @@ type ApproachStats = {
   outputTokens: number;
   elapsedMs: number;
   metaphorCount: number;
+};
+
+type Level1ApiAccessStatus = {
+  mode: Level1ApiMode;
+  canUsePersonalCredentials: boolean;
+  personalCredentialsReady: boolean;
+  selectedModeReady: boolean;
+  providers: {
+    OPENAI: {
+      required: boolean;
+      source: Level1ApiMode;
+      configured: boolean;
+      ready: boolean;
+      keyHint: string | null;
+    };
+    CLAUDE: {
+      required: boolean;
+      source: Level1ApiMode;
+      configured: boolean;
+      ready: boolean;
+      keyHint: string | null;
+    };
+  };
 };
 
 @Injectable()
@@ -99,6 +129,7 @@ export class Nivel1Service {
     private prisma: PrismaService,
     private ai: AiService,
     private configService: ConfigService,
+    private aiCredentials: AiCredentialsService,
   ) {
     this.maxRetries = this.clampInt(
       this.configService.get('LEVEL1_MAX_RETRIES', '3'),
@@ -118,9 +149,16 @@ export class Nivel1Service {
     );
   }
 
-  async process(analysisId: string) {
+  async process(
+    analysisId: string,
+    userId: string,
+    isGuest: boolean,
+  ) {
     const analysisDoc =
-      await this.getAnalysisWithDocument(analysisId);
+      await this.getAnalysisWithDocument(
+        analysisId,
+        userId,
+      );
 
     if (analysisDoc.level0Status !== 'APPROVED') {
       throw new BadRequestException(
@@ -160,6 +198,22 @@ export class Nivel1Service {
       analysisDoc.document.level1ConfigOverrides,
     );
 
+    const apiAccess =
+      await this.buildApiAccessStatus(
+        analysisDoc.level1ApiMode,
+        userId,
+        isGuest,
+        config,
+      );
+
+    if (!apiAccess.selectedModeReady) {
+      throw new BadRequestException(
+        this.buildMissingCredentialMessage(
+          apiAccess,
+        ),
+      );
+    }
+
     const selected = this.selectSentences(
       allSentences,
       config,
@@ -189,7 +243,8 @@ export class Nivel1Service {
         `oraciones_disponibles=${allSentences.length} | ` +
         `seleccionadas=${targets.length} | ` +
         `lote=${config.batchSize} | ` +
-        `enfoques=${config.approaches.join(', ')}`,
+        `enfoques=${config.approaches.join(', ')} | ` +
+        `fuente_api=${apiAccess.mode}`,
     );
 
     this.logger.log(
@@ -218,6 +273,13 @@ export class Nivel1Service {
         this.buildSystemPrompt(config);
 
       for (const approach of config.approaches) {
+        const aiOptions =
+          await this.resolveAiCompletionOptions(
+            apiAccess.mode,
+            userId,
+            approach,
+          );
+
         const startedAt = Date.now();
 
         let model: string | null = null;
@@ -254,6 +316,7 @@ export class Nivel1Service {
               approach as AiProviderEnum,
               messages,
               systemPrompt,
+              aiOptions,
             );
 
           requests += result.attempts;
@@ -304,6 +367,8 @@ export class Nivel1Service {
         stats.push({
           approach,
           model,
+          credentialSource:
+            aiOptions.credentialSource ?? 'MELT',
           requests,
           successfulRequests,
           failedRequests,
@@ -390,6 +455,24 @@ export class Nivel1Service {
         },
 
         config,
+
+        apiAccess: {
+          mode: apiAccess.mode,
+          providers: {
+            OPENAI: {
+              required:
+                apiAccess.providers.OPENAI.required,
+              source:
+                apiAccess.providers.OPENAI.source,
+            },
+            CLAUDE: {
+              required:
+                apiAccess.providers.CLAUDE.required,
+              source:
+                apiAccess.providers.CLAUDE.source,
+            },
+          },
+        },
 
         totalAvailableSentences:
           allSentences.length,
@@ -605,11 +688,13 @@ export class Nivel1Service {
         results:
           await this.getResults(
             analysisId,
+            userId,
           ),
 
         metadata:
           await this.getMetadata(
             analysisId,
+            userId,
           ),
       };
     } catch (error) {
@@ -647,10 +732,13 @@ export class Nivel1Service {
 
   async getPreview(
     analysisId: string,
+    userId: string,
+    isGuest: boolean,
   ) {
     const analysisDoc =
       await this.getAnalysisWithDocument(
         analysisId,
+        userId,
       );
 
     const config =
@@ -660,6 +748,14 @@ export class Nivel1Service {
 
         analysisDoc.document
           .level1ConfigOverrides,
+      );
+
+    const apiAccess =
+      await this.buildApiAccessStatus(
+        analysisDoc.level1ApiMode,
+        userId,
+        isGuest,
+        config,
       );
 
     const sentences =
@@ -682,6 +778,16 @@ export class Nivel1Service {
               config.batchSize,
           )
         : 0;
+
+    const dependentLevelIsProcessing =
+      analysisDoc.level2Status ===
+        'PROCESSING' ||
+      analysisDoc.level3Status ===
+        'PROCESSING' ||
+      analysisDoc.level4Status ===
+        'PROCESSING' ||
+      analysisDoc.level5Status ===
+        'PROCESSING';
 
     return {
       analysisId,
@@ -727,19 +833,31 @@ export class Nivel1Service {
         nextSentence: true,
       },
 
+      apiAccess,
+
       canProcess:
         analysisDoc.level0Status ===
           'APPROVED' &&
         sentences.length > 0 &&
         config.approaches.length > 0 &&
         analysisDoc.level1Status !==
-          'PROCESSING',
+          'PROCESSING' &&
+        !dependentLevelIsProcessing &&
+        apiAccess.selectedModeReady,
     };
   }
 
   async getMetadata(
     analysisId: string,
+    userId?: string,
   ) {
+    if (userId) {
+      await this.assertAnalysisAccess(
+        analysisId,
+        userId,
+      );
+    }
+
     const analysis =
       await this.prisma.documentAnalysis.findUnique(
         {
@@ -775,7 +893,15 @@ export class Nivel1Service {
 
   async getResults(
     analysisId: string,
+    userId?: string,
   ) {
+    if (userId) {
+      await this.assertAnalysisAccess(
+        analysisId,
+        userId,
+      );
+    }
+
     return this.prisma.primaryMetaphor.findMany(
       {
         where: {
@@ -807,6 +933,7 @@ export class Nivel1Service {
 
   private async getAnalysisWithDocument(
     analysisId: string,
+    userId: string,
   ) {
     const analysis =
       await this.prisma.documentAnalysis.findUnique(
@@ -818,20 +945,208 @@ export class Nivel1Service {
           include: {
             document: {
               include: {
-                corpus: true,
+                corpus: {
+                  include: {
+                    users: {
+                      where: {
+                        userId,
+                      },
+                    },
+                  },
+                },
               },
             },
           },
         },
       );
 
-    if (!analysis) {
+    if (
+      !analysis ||
+      analysis.document.corpus.users.length === 0
+    ) {
       throw new NotFoundException(
         `No analysis was found with ID: ${analysisId}`,
       );
     }
 
     return analysis;
+  }
+
+  private async assertAnalysisAccess(
+    analysisId: string,
+    userId: string,
+  ) {
+    await this.getAnalysisWithDocument(
+      analysisId,
+      userId,
+    );
+  }
+
+  private async buildApiAccessStatus(
+    mode: Level1ApiMode,
+    userId: string,
+    isGuest: boolean,
+    config: Level1Config,
+  ): Promise<Level1ApiAccessStatus> {
+    const credentialStatus =
+      await this.aiCredentials.getCredentialStatus(
+        userId,
+        isGuest,
+      );
+
+    const openAiRequired =
+      config.approaches.includes(
+        'OPENAI',
+      );
+
+    const claudeRequired =
+      config.approaches.includes(
+        'CLAUDE',
+      );
+
+    const openAiConfigured =
+      credentialStatus.credentials
+        .OPENAI.configured;
+
+    const claudeConfigured =
+      credentialStatus.credentials
+        .CLAUDE.configured;
+
+    const personalCredentialsReady =
+      credentialStatus.canUsePersonalCredentials &&
+      (!openAiRequired ||
+        openAiConfigured) &&
+      (!claudeRequired ||
+        claudeConfigured);
+
+    const selectedModeReady =
+      mode === 'MELT'
+        ? true
+        : personalCredentialsReady;
+
+    return {
+      mode,
+
+      canUsePersonalCredentials:
+        credentialStatus.canUsePersonalCredentials,
+
+      personalCredentialsReady,
+
+      selectedModeReady,
+
+      providers: {
+        OPENAI: {
+          required:
+            openAiRequired,
+
+          source:
+            mode,
+
+          configured:
+            openAiConfigured,
+
+          ready:
+            mode === 'MELT'
+              ? true
+              : !openAiRequired ||
+                openAiConfigured,
+
+          keyHint:
+            credentialStatus.credentials
+              .OPENAI.keyHint,
+        },
+
+        CLAUDE: {
+          required:
+            claudeRequired,
+
+          source:
+            mode,
+
+          configured:
+            claudeConfigured,
+
+          ready:
+            mode === 'MELT'
+              ? true
+              : !claudeRequired ||
+                claudeConfigured,
+
+          keyHint:
+            credentialStatus.credentials
+              .CLAUDE.keyHint,
+        },
+      },
+    };
+  }
+
+  private buildMissingCredentialMessage(
+    apiAccess: Level1ApiAccessStatus,
+  ): string {
+    if (apiAccess.mode !== 'PERSONAL') {
+      return 'The selected AI access mode is not ready.';
+    }
+
+    if (!apiAccess.canUsePersonalCredentials) {
+      return 'Personal AI credentials are not available for this user.';
+    }
+
+    const missing: string[] = [];
+
+    if (
+      apiAccess.providers.OPENAI.required &&
+      !apiAccess.providers.OPENAI.configured
+    ) {
+      missing.push('OPENAI');
+    }
+
+    if (
+      apiAccess.providers.CLAUDE.required &&
+      !apiAccess.providers.CLAUDE.configured
+    ) {
+      missing.push('CLAUDE');
+    }
+
+    if (missing.length === 0) {
+      return 'Personal AI credentials are not ready for Level 1.';
+    }
+
+    return (
+      'Personal AI credentials are incomplete. ' +
+      `Missing credential(s): ${missing.join(', ')}.`
+    );
+  }
+
+  private async resolveAiCompletionOptions(
+    mode: Level1ApiMode,
+    userId: string,
+    approach: Level1Approach,
+  ): Promise<AiCompletionOptions> {
+    if (mode === 'MELT') {
+      return {
+        credentialSource: 'MELT',
+      };
+    }
+
+    const provider =
+      approach as AiProviderEnum;
+
+    const apiKey =
+      await this.aiCredentials.getDecryptedCredential(
+        userId,
+        provider,
+      );
+
+    if (!apiKey) {
+      throw new BadRequestException(
+        `Personal AI credential for ${approach} is not configured.`,
+      );
+    }
+
+    return {
+      apiKey,
+      credentialSource: 'PERSONAL',
+    };
   }
 
   private readLevel0Sentences(
@@ -1570,6 +1885,7 @@ Si ninguna oración contiene usos metafóricos que satisfagan MIPVU, responde ex
     provider: AiProviderEnum,
     messages: AiMessage[],
     systemPrompt: string,
+    options: AiCompletionOptions,
   ) {
     let lastError: unknown;
     let attempts = 0;
@@ -1590,6 +1906,7 @@ Si ninguna oración contiene usos metafóricos que satisfagan MIPVU, responde ex
             provider,
             messages,
             systemPrompt,
+            options,
           );
 
         totalInputTokens +=

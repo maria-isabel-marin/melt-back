@@ -11,22 +11,29 @@ import {
   UseInterceptors,
   UploadedFile,
 } from '@nestjs/common';
+import {
+  AiProvider,
+  Language,
+  DocumentType,
+} from '@prisma/client';
+import { FileInterceptor } from '@nestjs/platform-express';
+
 import { DocumentosService } from './documentos.service';
 import { IngestionService } from './ingestion.service';
 import { IngestDocumentoDto } from './dto/ingest-documento.dto';
 import { CreateDocumentoDto } from './dto/create-documento.dto';
+
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { shouldRestrictGuestPersonalAi } from '../../common/ai-access/guest-personal-ai';
 import type { JwtPayload } from '../auth/auth.service';
-import { AiProvider, Language, DocumentType } from '@prisma/client';
-import { FileInterceptor } from '@nestjs/platform-express';
 
 @Controller('documentos')
 @UseGuards(JwtAuthGuard)
 export class DocumentosController {
   constructor(
-    private service: DocumentosService,
-    private ingestionService: IngestionService,
+    private readonly service: DocumentosService,
+    private readonly ingestionService: IngestionService,
   ) {}
 
   @Get()
@@ -127,6 +134,36 @@ export class DocumentosController {
     );
   }
 
+  @Get(':id/level1/api-access')
+  getLevel1ApiAccess(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.service.getLevel1ApiAccess(
+      id,
+      user.sub,
+      shouldRestrictGuestPersonalAi(
+        user.isGuest,
+      ),
+    );
+  }
+
+  @Put(':id/level1/api-access')
+  updateLevel1ApiAccess(
+    @Param('id') id: string,
+    @Body('mode') mode: unknown,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.service.updateLevel1ApiAccess(
+      id,
+      user.sub,
+      shouldRestrictGuestPersonalAi(
+        user.isGuest,
+      ),
+      mode,
+    );
+  }
+
   @Get(':id/level1/config')
   getLevel1Config(
     @Param('id') id: string,
@@ -198,7 +235,8 @@ export class DocumentosController {
   @Post(':id/analisis')
   initAnalisis(
     @Param('id') id: string,
-    @Body('aiProvider') aiProvider: AiProvider = 'HUGGINGFACE',
+    @Body('aiProvider')
+    aiProvider: AiProvider = 'HUGGINGFACE',
     @CurrentUser() user: JwtPayload,
   ) {
     return this.service.initializeAnalisis(

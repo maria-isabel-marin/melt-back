@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AiModule } from '../ai/ai.module';
+import { AiCredentialsModule } from '../ai-credentials/ai-credentials.module';
 import { AnalisisController } from './analisis.controller';
 import { AnalisisService } from './analisis.service';
 import { Nivel1Service } from './niveles/nivel1.service';
@@ -9,9 +10,26 @@ import { Nivel4Service } from './niveles/nivel4.service';
 import { Nivel5Service } from './niveles/nivel5.service';
 
 @Module({
-  imports: [AiModule],
-  controllers: [AnalisisController],
-  providers: [AnalisisService, Nivel1Service, Nivel2Service, Nivel3Service, Nivel4Service, Nivel5Service],
-  exports: [AnalisisService],
+  imports: [
+    AiModule,
+    AiCredentialsModule,
+  ],
+
+  controllers: [
+    AnalisisController,
+  ],
+
+  providers: [
+    AnalisisService,
+    Nivel1Service,
+    Nivel2Service,
+    Nivel3Service,
+    Nivel4Service,
+    Nivel5Service,
+  ],
+
+  exports: [
+    AnalisisService,
+  ],
 })
 export class AnalisisModule {}

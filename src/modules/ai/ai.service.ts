@@ -6,8 +6,10 @@ import {
   Logger,
 } from '@nestjs/common';
 import {
-  AiProvider,
+  AiCompletionOptions,
+  AiCredentialSource,
   AiMessage,
+  AiProvider,
   AiResponse,
 } from './ai-provider.interface';
 import { ClaudeProvider } from './providers/claude.provider';
@@ -36,10 +38,6 @@ export class AiJsonResponseException extends BadGatewayException {
   }
 }
 
-type AiResponseWithStopReason = AiResponse & {
-  stopReason?: string | null;
-};
-
 @Injectable()
 export class AiService {
   private readonly providers: Record<string, AiProvider>;
@@ -61,6 +59,7 @@ export class AiService {
     providerName: AiProviderEnum,
     messages: AiMessage[],
     systemPrompt?: string,
+    options?: AiCompletionOptions,
   ): Promise<AiResponse> {
     const provider = this.providers[providerName];
 
@@ -70,27 +69,56 @@ export class AiService {
       );
     }
 
-    try {
-      const response = await provider.complete(messages, systemPrompt);
-      const stopReason = (response as AiResponseWithStopReason).stopReason;
+    const requestedCredentialSource =
+      this.resolveRequestedCredentialSource(options);
 
-      this.logger.log(
-        `[AI] provider=${providerName} model=${response.model} ` +
-          `inputTokens=${response.usage?.inputTokens ?? 0} ` +
-          `outputTokens=${response.usage?.outputTokens ?? 0}` +
-          (stopReason ? ` stopReason=${stopReason}` : ''),
+    try {
+      const response = await provider.complete(
+        messages,
+        systemPrompt,
+        options,
       );
 
-      return response;
+      const credentialSource =
+        response.credentialSource ??
+        requestedCredentialSource;
+
+      const normalizedResponse: AiResponse = {
+        ...response,
+        credentialSource,
+      };
+
+      this.logger.log(
+        `[AI] provider=${providerName} ` +
+          `credentialSource=${credentialSource} ` +
+          `model=${normalizedResponse.model} ` +
+          `inputTokens=${normalizedResponse.usage?.inputTokens ?? 0} ` +
+          `outputTokens=${normalizedResponse.usage?.outputTokens ?? 0}` +
+          (normalizedResponse.stopReason
+            ? ` stopReason=${normalizedResponse.stopReason}`
+            : ''),
+      );
+
+      return normalizedResponse;
     } catch (error) {
-      if (error instanceof HttpException) throw error;
+      if (error instanceof HttpException) {
+        throw error;
+      }
 
       const status = this.readHttpStatus(error);
       const message = this.readErrorMessage(error);
 
-      this.logger.error(`[AI] provider=${providerName} error=${message}`);
+      this.logger.error(
+        `[AI] provider=${providerName} ` +
+          `credentialSource=${requestedCredentialSource} ` +
+          `error=${message}`,
+      );
 
-      if (status !== null && status >= 400 && status <= 599) {
+      if (
+        status !== null &&
+        status >= 400 &&
+        status <= 599
+      ) {
         throw new HttpException(
           `AI provider error (${providerName}): ${message}`,
           status,
@@ -105,12 +133,15 @@ export class AiService {
     providerName: AiProviderEnum,
     messages: AiMessage[],
     systemPrompt?: string,
+    options?: AiCompletionOptions,
   ): Promise<T> {
-    const result = await this.completeJsonWithMeta<T>(
-      providerName,
-      messages,
-      systemPrompt,
-    );
+    const result =
+      await this.completeJsonWithMeta<T>(
+        providerName,
+        messages,
+        systemPrompt,
+        options,
+      );
 
     return result.data;
   }
@@ -119,11 +150,16 @@ export class AiService {
     providerName: AiProviderEnum,
     messages: AiMessage[],
     systemPrompt?: string,
+    options?: AiCompletionOptions,
   ): Promise<AiJsonResponse<T>> {
-    const response = await this.complete(providerName, messages, systemPrompt);
-    const stopReason = (response as AiResponseWithStopReason).stopReason;
+    const response = await this.complete(
+      providerName,
+      messages,
+      systemPrompt,
+      options,
+    );
 
-    if (stopReason === 'max_tokens') {
+    if (response.stopReason === 'max_tokens') {
       throw new AiJsonResponseException(
         providerName,
         'MAX_TOKENS',
@@ -131,7 +167,9 @@ export class AiService {
       );
     }
 
-    const raw = this.extractJsonCandidate(response.content);
+    const raw = this.extractJsonCandidate(
+      response.content,
+    );
 
     try {
       return {
@@ -147,11 +185,33 @@ export class AiService {
     }
   }
 
-  private extractJsonCandidate(content: string): string {
-    let value = String(content ?? '').replace(/^\uFEFF/, '').trim();
+  private resolveRequestedCredentialSource(
+    options?: AiCompletionOptions,
+  ): AiCredentialSource {
+    if (
+      options?.credentialSource === 'PERSONAL' ||
+      Boolean(options?.apiKey?.trim())
+    ) {
+      return 'PERSONAL';
+    }
 
-    const fenced = value.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-    if (fenced) value = fenced[1].trim();
+    return 'MELT';
+  }
+
+  private extractJsonCandidate(
+    content: string,
+  ): string {
+    let value = String(content ?? '')
+      .replace(/^\uFEFF/, '')
+      .trim();
+
+    const fenced = value.match(
+      /```(?:json)?\s*([\s\S]*?)\s*```/i,
+    );
+
+    if (fenced) {
+      value = fenced[1].trim();
+    }
 
     try {
       JSON.parse(value);
@@ -160,23 +220,50 @@ export class AiService {
       // Intentar aislar el primer objeto JSON.
     }
 
-    const objectStart = value.indexOf('{');
-    const objectEnd = value.lastIndexOf('}');
-    if (objectStart >= 0 && objectEnd > objectStart) {
-      return value.slice(objectStart, objectEnd + 1);
+    const objectStart =
+      value.indexOf('{');
+
+    const objectEnd =
+      value.lastIndexOf('}');
+
+    if (
+      objectStart >= 0 &&
+      objectEnd > objectStart
+    ) {
+      return value.slice(
+        objectStart,
+        objectEnd + 1,
+      );
     }
 
-    const arrayStart = value.indexOf('[');
-    const arrayEnd = value.lastIndexOf(']');
-    if (arrayStart >= 0 && arrayEnd > arrayStart) {
-      return value.slice(arrayStart, arrayEnd + 1);
+    const arrayStart =
+      value.indexOf('[');
+
+    const arrayEnd =
+      value.lastIndexOf(']');
+
+    if (
+      arrayStart >= 0 &&
+      arrayEnd > arrayStart
+    ) {
+      return value.slice(
+        arrayStart,
+        arrayEnd + 1,
+      );
     }
 
     return value;
   }
 
-  private readHttpStatus(error: unknown): number | null {
-    if (typeof error !== 'object' || error === null) return null;
+  private readHttpStatus(
+    error: unknown,
+  ): number | null {
+    if (
+      typeof error !== 'object' ||
+      error === null
+    ) {
+      return null;
+    }
 
     const candidate =
       (error as any).status ??
@@ -184,16 +271,30 @@ export class AiService {
       (error as any).response?.status;
 
     const numeric = Number(candidate);
-    return Number.isFinite(numeric) ? numeric : null;
+
+    return Number.isFinite(numeric)
+      ? numeric
+      : null;
   }
 
-  private readErrorMessage(error: unknown): string {
-    if (error instanceof Error) return error.message;
+  private readErrorMessage(
+    error: unknown,
+  ): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
 
-    if (typeof error === 'object' && error !== null) {
+    if (
+      typeof error === 'object' &&
+      error !== null
+    ) {
       const candidate =
-        (error as any).message ?? (error as any).error?.message;
-      if (candidate) return String(candidate);
+        (error as any).message ??
+        (error as any).error?.message;
+
+      if (candidate) {
+        return String(candidate);
+      }
     }
 
     return String(error);

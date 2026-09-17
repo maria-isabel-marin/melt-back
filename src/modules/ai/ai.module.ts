@@ -5,7 +5,15 @@ import { OpenAiProvider } from './providers/openai.provider';
 import { HuggingFaceProvider } from './providers/huggingface.provider';
 
 @Module({
-  providers: [AiService, ClaudeProvider, OpenAiProvider, HuggingFaceProvider],
-  exports: [AiService],
+  providers: [
+    AiService,
+    ClaudeProvider,
+    OpenAiProvider,
+    HuggingFaceProvider,
+  ],
+
+  exports: [
+    AiService,
+  ],
 })
 export class AiModule {}

@@ -25,9 +25,25 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  corpora UserCorpus[]
+  corpora       UserCorpus[]
+  aiCredentials UserAiCredential[]
 
   @@map("users")
+}
+
+model UserAiCredential {
+  id              String     @id @default(uuid())
+  userId          String
+  provider        AiProvider
+  encryptedApiKey String
+  keyHint         String?    @db.VarChar(20)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider])
+  @@map("user_ai_credentials")
 }
 
 model Corpus {
@@ -44,7 +60,7 @@ model Corpus {
 
   users     UserCorpus[]
   documents Document[]
-  pipelines DocumentIngestionPipeline[] // <--- NUEVO
+  pipelines DocumentIngestionPipeline[]
 
   @@map("corpus")
 }
@@ -117,7 +133,6 @@ model DocumentIngestionPipeline {
   description String?
   corpusId    String
 
-  // Configuración opcional
   author        String?
   language      Language?
   documentType  DocumentType?
@@ -133,9 +148,10 @@ model DocumentIngestionPipeline {
 // =============================================================================
 
 model DocumentAnalysis {
-  id         String     @id @default(uuid())
-  documentId String     @unique
-  aiProvider AiProvider @default(CLAUDE)
+  id            String        @id @default(uuid())
+  documentId    String        @unique
+  aiProvider    AiProvider    @default(CLAUDE)
+  level1ApiMode Level1ApiMode @default(MELT)
 
   level0Status LevelStatus @default(PENDING)
   level1Status LevelStatus @default(PENDING)
@@ -144,8 +160,6 @@ model DocumentAnalysis {
   level4Status LevelStatus @default(PENDING)
   level5Status LevelStatus @default(PENDING)
 
-  // Metadatos de la última ejecución de Nivel 1: configuración efectiva,
-  // muestra, enfoques, modelos, tokens, tiempos y concordancia.
   level1Metadata Json?
 
   createdAt DateTime @default(now())
@@ -175,6 +189,11 @@ enum AiProvider {
   HUGGINGFACE
 }
 
+enum Level1ApiMode {
+  MELT
+  PERSONAL
+}
+
 // =============================================================================
 // LEVEL 1 — PRIMARY METAPHORS
 // =============================================================================
@@ -183,7 +202,6 @@ model PrimaryMetaphor {
   id         String @id @default(uuid())
   analysisId String
 
-  // Trazabilidad exacta hacia N0.
   sentenceId      String? @db.VarChar(200)
   page            Int?
   chapter         String? @db.VarChar(500)
@@ -200,7 +218,6 @@ model PrimaryMetaphor {
   targetDomain           String? @db.VarChar(200)
   conceptualMetaphor     String? @db.VarChar(500)
 
-  // Se conserva una fila por enfoque para comparar Claude/OpenAI.
   approach                AiProvider?
   modelName               String?     @db.VarChar(200)
   modelConfidence         Float?
@@ -307,7 +324,6 @@ enum ConventionalizationRobustness {
   WEAK
 }
 
-// M:N — PrimaryMetaphor <-> ConventionalMetaphor
 model PrimaryMetaphorConventional {
   conventionalMetaphorId String
   primaryMetaphorId      String
@@ -461,7 +477,6 @@ model MetaphorRegime {
   @@map("metaphor_regimes")
 }
 
-// M:N — MetaphoricalScenario <-> MetaphorRegime
 model ScenarioRegime {
   regimeId   String
   scenarioId String
